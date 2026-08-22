@@ -13,6 +13,7 @@
 #include "file_manager.h"
 #include "ui_renderer.h"
 #include "wifi_sync.h"
+#include "app_switch.h"
 
 // Enum for sleep reasons
 enum class SleepReason {
@@ -59,6 +60,7 @@ bool deleteConfirmPending = false;
 WritingMode writingMode = WritingMode::NORMAL;
 FontSize fontSize = FontSize::LARGE;
 bool showWordCount = true;
+bool appSwitchFailed = false;
 
 // --- Screen update ---
 static void updateScreen() {
@@ -97,6 +99,7 @@ static void updateScreen() {
     case UIState::BLUETOOTH_SETTINGS: drawBluetoothSettings(renderer, gpio); break;
     case UIState::PAIRED_KEYBOARDS:   drawPairedKeyboardsMenu(renderer, gpio); break;
     case UIState::WIFI_SYNC:          drawSyncScreen(renderer, gpio); break;
+    case UIState::APP_SWITCH_CONFIRM: drawAppSwitchConfirm(renderer, gpio); break;
     default: break;
   }
 }
@@ -136,6 +139,7 @@ void setup() {
   editorInit();
   inputSetup();
   fileManagerSetup();
+  appSwitchSetup();
 
   // Restore UI prefs from SD backup if NVS was wiped by a firmware flash
   if (!uiPrefs.isKey("orient")) {
@@ -442,6 +446,17 @@ static void processPhysicalButtons() {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
+      if (btnConfirm && !btnConfirmLast) {
+        enqueueKeyEvent(HID_KEY_ENTER, 0, true);
+        enqueueKeyEvent(HID_KEY_ENTER, 0, false);
+      }
+      if (btnBack && !btnBackLast) {
+        enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
+        enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
+      }
+      break;
+
+    case UIState::APP_SWITCH_CONFIRM:
       if (btnConfirm && !btnConfirmLast) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);

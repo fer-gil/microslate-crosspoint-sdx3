@@ -4,6 +4,7 @@
 #include "file_manager.h"
 #include "ble_keyboard.h"
 #include "wifi_sync.h"
+#include "app_switch.h"
 
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
@@ -21,6 +22,7 @@ extern bool deleteConfirmPending;
 extern WritingMode writingMode;
 extern FontSize fontSize;
 extern bool showWordCount;
+extern bool appSwitchFailed;
 
 // External functions
 uint32_t getCurrentPasskey();
@@ -206,8 +208,8 @@ void drawMainMenu(GfxRenderer& renderer, HalGPIO& gpio) {
   renderer.drawCenteredText(FONT_BODY, 30, "MicroSlate", tc, EpdFontFamily::BOLD);
 
   // Menu items
-  static const char* baseMenuItems[] = {"Browse Files", "New Note", "Settings", "Sync"};
-  constexpr int menuCount = 4;
+  static const char* baseMenuItems[] = {"Browse Files", "New Note", "Settings", "Sync", "CrossPoint Reader"};
+  const int menuCount = isCrossPointAvailable() ? 5 : 4;
   for (int i = 0; i < menuCount; i++) {
     int yPos = 90 + (i * 45);
     const char* label = baseMenuItems[i];
@@ -227,6 +229,39 @@ void drawMainMenu(GfxRenderer& renderer, HalGPIO& gpio) {
     drawBleStatus(renderer, 20, sh - bm + 28);
   }
   drawBattery(renderer, gpio);
+
+  renderer.beginRefresh(HalDisplay::FAST_REFRESH);
+}
+
+void drawAppSwitchConfirm(GfxRenderer& renderer, HalGPIO& gpio) {
+  renderer.clearScreen();
+  const int sw = renderer.getScreenWidth();
+  const int sh = renderer.getScreenHeight();
+  const bool tc = !darkMode;
+
+  if (darkMode) clippedFillRect(renderer, 0, 0, sw, sh, true);
+
+  drawClippedText(renderer, FONT_SMALL, 10, 5, "Switch app", 0, tc, EpdFontFamily::BOLD);
+  drawBattery(renderer, gpio);
+  clippedLine(renderer, 5, 32, sw - 5, 32, tc);
+
+  if (appSwitchFailed) {
+    renderer.drawCenteredText(FONT_BODY, 90, "Could not open CrossPoint", tc, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(FONT_UI, 130, "No firmware was changed.", tc);
+    renderer.drawCenteredText(FONT_SMALL, 160, "Press Esc to return.", tc);
+  } else {
+    renderer.drawCenteredText(FONT_BODY, 90, "Open CrossPoint Reader?", tc, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(FONT_UI, 130, "MicroSlate will restart.", tc);
+    renderer.drawCenteredText(FONT_SMALL, 160, "Your saved notes stay on the SD card.", tc);
+  }
+
+  constexpr int footerMargin = 48;
+  clippedLine(renderer, 10, sh - footerMargin, sw - 10, sh - footerMargin, tc);
+  if (appSwitchFailed) {
+    drawFooterHints(renderer, sh - footerMargin + 12, tc, {"Esc: Back"});
+  } else {
+    drawFooterHints(renderer, sh - footerMargin + 12, tc, {"Enter: Switch", "Esc: Cancel"});
+  }
 
   renderer.beginRefresh(HalDisplay::FAST_REFRESH);
 }
@@ -1002,4 +1037,3 @@ void drawSyncScreen(GfxRenderer& renderer, HalGPIO& gpio) {
 
   renderer.beginRefresh(HalDisplay::FAST_REFRESH);
 }
-

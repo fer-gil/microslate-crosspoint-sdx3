@@ -12,3 +12,4 @@ void drawSettingsMenu(GfxRenderer& renderer, HalGPIO& gpio);
 void drawBluetoothSettings(GfxRenderer& renderer, HalGPIO& gpio);
 void drawPairedKeyboardsMenu(GfxRenderer& renderer, HalGPIO& gpio);
 void drawSyncScreen(GfxRenderer& renderer, HalGPIO& gpio);
+void drawAppSwitchConfirm(GfxRenderer& renderer, HalGPIO& gpio);

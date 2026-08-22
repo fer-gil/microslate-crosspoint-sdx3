@@ -13,7 +13,8 @@ enum class UIState {
   SETTINGS,
   BLUETOOTH_SETTINGS,
   PAIRED_KEYBOARDS,
-  WIFI_SYNC
+  WIFI_SYNC,
+  APP_SWITCH_CONFIRM
 };
 
 // --- Display Orientation ---

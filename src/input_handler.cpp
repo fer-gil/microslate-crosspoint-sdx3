@@ -3,6 +3,7 @@
 #include "file_manager.h"
 #include "ble_keyboard.h"
 #include "wifi_sync.h"
+#include "app_switch.h"
 
 #include <Arduino.h>
 #include <SDCardManager.h>
@@ -15,6 +16,7 @@ extern bool deleteConfirmPending;
 extern WritingMode writingMode;
 extern FontSize fontSize;
 extern bool showWordCount;
+extern bool appSwitchFailed;
 
 // External functions
 void storePairedDevice(const std::string& address, const std::string& name);
@@ -293,7 +295,7 @@ static void dispatchEvent(const KeyEvent& event) {
 
   switch (currentState) {
     case UIState::MAIN_MENU: {
-      int menuCount = 4;
+      const int menuCount = isCrossPointAvailable() ? 5 : 4;
       if (event.keyCode == HID_KEY_DOWN) {
         mainMenuSelection = (mainMenuSelection + 1) % menuCount;
         screenDirty = true;
@@ -314,6 +316,10 @@ static void dispatchEvent(const KeyEvent& event) {
         } else if (mainMenuSelection == 3) {
           wifiSyncStart();
           currentState = UIState::WIFI_SYNC;
+          screenDirty = true;
+        } else if (mainMenuSelection == 4 && isCrossPointAvailable()) {
+          appSwitchFailed = false;
+          currentState = UIState::APP_SWITCH_CONFIRM;
           screenDirty = true;
         }
       }
@@ -523,6 +529,20 @@ static void dispatchEvent(const KeyEvent& event) {
 
     case UIState::WIFI_SYNC: {
       syncHandleKey(event.keyCode, event.modifiers);
+      break;
+    }
+
+    case UIState::APP_SWITCH_CONFIRM: {
+      if (event.keyCode == HID_KEY_ESCAPE) {
+        appSwitchFailed = false;
+        currentState = UIState::MAIN_MENU;
+        screenDirty = true;
+      } else if (event.keyCode == HID_KEY_ENTER) {
+        if (!switchToCrossPoint()) {
+          appSwitchFailed = true;
+          screenDirty = true;
+        }
+      }
       break;
     }
 
