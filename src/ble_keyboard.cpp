@@ -102,24 +102,36 @@ static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
     length--;
   }
 
-  // Must be 7 or 8 bytes after stripping. Consumer-control / media-key reports
-  // from other report IDs arrive here too — silently ignore them.
-  if (length < 7 || length > 8) {
-    DBG_PRINTF("[KB-Notify] Ignoring %d-byte report (not keyboard format)\n", (int)length);
-    return;
-  }
-
-  uint8_t modifiers = pData[0];
+  uint8_t modifiers = 0;
   uint8_t newReport[8] = {0};
 
-  // Normalize to 8-byte format: [Mod] [Reserved=0] [Key1-Key6]
-  if (length == 8) {
+  if (length == 14) {
+    // Corsair K70 BLE:
+    // byte 0 = standard HID modifier bitmap
+    // bytes 1-13 = currently pressed HID keycodes
+    modifiers = pData[0];
+    newReport[0] = modifiers;
+    newReport[1] = 0;
+
+    int out = 2;
+    for (size_t i = 1; i < length && out < 8; i++) {
+      if (pData[i] != 0) {
+        newReport[out++] = pData[i];
+      }
+    }
+  } else if (length == 8) {
+    // Standard HID keyboard report.
     memcpy(newReport, pData, 8);
-  } else {
-    // 7-byte compact: insert reserved byte
-    newReport[0] = pData[0];  // Modifiers
-    newReport[1] = 0;          // Reserved
+    modifiers = newReport[0];
+  } else if (length == 7) {
+    // Compact keyboard report: insert reserved byte.
+    modifiers = pData[0];
+    newReport[0] = modifiers;
+    newReport[1] = 0;
     memcpy(&newReport[2], &pData[1], 6);
+  } else {
+    DBG_PRINTF("[KB-Notify] Ignoring %d-byte report (not keyboard format)\n", (int)length);
+    return;
   }
 
 #ifndef RELEASE_BUILD
