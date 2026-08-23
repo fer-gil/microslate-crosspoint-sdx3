@@ -87,6 +87,13 @@ static void pruneStaleDevices() {
 // Keyboard notification callback
 static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
                               uint8_t* pData, size_t length, bool isNotify) {
+#ifndef RELEASE_BUILD
+  Serial.printf("[KB-RAW len=%d] ", (int)length);
+  for (size_t i = 0; i < length; i++) {
+    Serial.printf("%02X ", pData[i]);
+  }
+  Serial.println();
+#endif
   // Strip report ID prefix if the keyboard uses one (learned during HID discovery).
   // e.g. 9-byte: [ReportID][Mod][Reserved][K1-K6]  →  strip to 8-byte standard
   //      8-byte: [ReportID][Mod][K1-K6]             →  strip to 7-byte compact
