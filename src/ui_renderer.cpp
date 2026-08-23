@@ -54,6 +54,10 @@ static EpdFont u10Regular(&ubuntu_10_regular);
 static EpdFont u10Bold(&ubuntu_10_bold);
 static EpdFontFamily u10Family(&u10Regular, &u10Bold);
 
+// OTA app detection (defined in main.cpp)
+extern OtaAppEntry otaApps[];
+extern int otaAppCount;
+
 // Extern shared state (defined in main.cpp)
 extern UIState currentState;
 extern int mainMenuSelection;
@@ -205,12 +209,12 @@ void drawMainMenu(GfxRenderer& renderer, HalGPIO& gpio) {
   // Title
   renderer.drawCenteredText(FONT_BODY, 30, "MicroSlate", tc, EpdFontFamily::BOLD);
 
-  // Menu items
+  // Menu items (base + dynamically detected OTA apps)
   static const char* baseMenuItems[] = {"Browse Files", "New Note", "Settings", "Sync"};
-  constexpr int menuCount = 4;
+  int menuCount = 4 + otaAppCount;
   for (int i = 0; i < menuCount; i++) {
     int yPos = 90 + (i * 45);
-    const char* label = baseMenuItems[i];
+    const char* label = (i < 4) ? baseMenuItems[i] : otaApps[i - 4].name;
     if (i == mainMenuSelection) {
       clippedFillRect(renderer, 5, yPos - 5, sw - 10, 35, tc);
       drawClippedText(renderer, FONT_UI, 20, yPos, label, sw - 40, !tc);
