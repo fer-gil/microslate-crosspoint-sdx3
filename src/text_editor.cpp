@@ -25,6 +25,47 @@ static bool lineBreaksDirty = true;  // Only recompute line breaks when buffer/c
 // Forward declaration
 static void ensureCursorVisible(int visibleLines);
 
+// UTF-8 helpers. Cursor/line positions remain byte offsets, but movement and
+// columns operate on complete Unicode codepoints.
+static bool isUtf8Continuation(unsigned char c) {
+  return (c & 0xC0) == 0x80;
+}
+
+static int previousCodepointStart(int pos) {
+  if (pos <= 0) return 0;
+  int p = pos - 1;
+  while (p > 0 && isUtf8Continuation((unsigned char)textBuffer[p])) p--;
+  return p;
+}
+
+static int nextCodepointEnd(int pos) {
+  if (pos >= (int)textLength) return (int)textLength;
+  int p = pos + 1;
+  while (p < (int)textLength &&
+         isUtf8Continuation((unsigned char)textBuffer[p])) {
+    p++;
+  }
+  return p;
+}
+
+static int countCodepoints(int start, int end) {
+  int count = 0;
+  for (int i = start; i < end; i++) {
+    if (!isUtf8Continuation((unsigned char)textBuffer[i])) count++;
+  }
+  return count;
+}
+
+static int byteOffsetForColumn(int start, int end, int column) {
+  int pos = start;
+  int col = 0;
+  while (pos < end && col < column) {
+    pos = nextCodepointEnd(pos);
+    col++;
+  }
+  return pos > end ? end : pos;
+}
+
 // Recalculate line breaks (word wrap) and cursor position.
 // The O(textLength) line break loop only runs when the buffer or charsPerLine changed.
 // Cursor line/col is always recomputed (cheap O(cursorLine) with early exit).
@@ -38,6 +79,9 @@ void editorRecalculateLines() {
     int lastSpace = -1;
 
     for (int i = 0; i < (int)textLength && lineCount < MAX_LINES; i++) {
+      // Continuation bytes belong to the codepoint already counted.
+      if (isUtf8Continuation((unsigned char)textBuffer[i])) continue;
+
       if (textBuffer[i] == '\n') {
         // Hard line break
         if (lineCount < MAX_LINES) {
@@ -55,19 +99,20 @@ void editorRecalculateLines() {
 
       col++;
       if (col >= charsPerLine) {
-        // Word wrap
+        // Word wrap, always at a complete UTF-8 codepoint boundary.
+        int cpEnd = nextCodepointEnd(i);
         int breakPos;
         if (lastSpace > linePositions[lineCount - 1]) {
           breakPos = lastSpace + 1; // Break after space
         } else {
-          breakPos = i + 1;  // Hard break mid-word
+          breakPos = cpEnd;         // Hard break after this codepoint
         }
 
         if (lineCount < MAX_LINES) {
           linePositions[lineCount] = breakPos;
           lineCount++;
         }
-        col = i + 1 - breakPos;
+        col = countCodepoints(breakPos, cpEnd);
         lastSpace = -1;
       }
     }
@@ -83,7 +128,7 @@ void editorRecalculateLines() {
       break;
     }
   }
-  cursorCol = cursorPosition - linePositions[cursorLine];
+  cursorCol = countCodepoints(linePositions[cursorLine], cursorPosition);
 }
 
 // Ensure cursor is visible by adjusting viewport
@@ -151,17 +196,19 @@ int editorGetWordCount() {
   return count;
 }
 
-void editorInsertChar(char c) {
-  if (textLength >= TEXT_BUFFER_SIZE - 1) return;
+void editorInsertText(const char* text) {
+  if (!text || !text[0]) return;
 
-  // Shift text right
-  for (int i = (int)textLength; i > cursorPosition; i--) {
-    textBuffer[i] = textBuffer[i - 1];
-  }
-  textBuffer[cursorPosition] = c;
-  cursorPosition++;
-  textLength++;
-  textBuffer[textLength] = '\0';
+  size_t insertLen = strlen(text);
+  if (textLength + insertLen >= TEXT_BUFFER_SIZE) return;
+
+  memmove(textBuffer + cursorPosition + insertLen,
+          textBuffer + cursorPosition,
+          textLength - cursorPosition + 1);
+  memcpy(textBuffer + cursorPosition, text, insertLen);
+
+  cursorPosition += (int)insertLen;
+  textLength += insertLen;
   unsavedChanges = true;
   lineBreaksDirty = true;
 
@@ -169,15 +216,23 @@ void editorInsertChar(char c) {
   ensureCursorVisible(storedVisibleLines);
 }
 
+void editorInsertChar(char c) {
+  char text[2] = {c, '\0'};
+  editorInsertText(text);
+}
+
 void editorDeleteChar() {
   if (cursorPosition <= 0 || textLength == 0) return;
 
-  for (int i = cursorPosition - 1; i < (int)textLength - 1; i++) {
-    textBuffer[i] = textBuffer[i + 1];
-  }
-  cursorPosition--;
-  textLength--;
-  textBuffer[textLength] = '\0';
+  int start = previousCodepointStart(cursorPosition);
+  int removeLen = cursorPosition - start;
+
+  memmove(textBuffer + start,
+          textBuffer + cursorPosition,
+          textLength - cursorPosition + 1);
+
+  cursorPosition = start;
+  textLength -= removeLen;
   unsavedChanges = true;
   lineBreaksDirty = true;
 
@@ -188,11 +243,14 @@ void editorDeleteChar() {
 void editorDeleteForward() {
   if (cursorPosition >= (int)textLength) return;
 
-  for (int i = cursorPosition; i < (int)textLength - 1; i++) {
-    textBuffer[i] = textBuffer[i + 1];
-  }
-  textLength--;
-  textBuffer[textLength] = '\0';
+  int end = nextCodepointEnd(cursorPosition);
+  int removeLen = end - cursorPosition;
+
+  memmove(textBuffer + cursorPosition,
+          textBuffer + end,
+          textLength - end + 1);
+
+  textLength -= removeLen;
   unsavedChanges = true;
   lineBreaksDirty = true;
 
@@ -202,7 +260,7 @@ void editorDeleteForward() {
 
 void editorMoveCursorLeft() {
   if (cursorPosition > 0) {
-    cursorPosition--;
+    cursorPosition = previousCodepointStart(cursorPosition);
     editorRecalculateLines();
     ensureCursorVisible(storedVisibleLines);
   }
@@ -210,7 +268,7 @@ void editorMoveCursorLeft() {
 
 void editorMoveCursorRight() {
   if (cursorPosition < (int)textLength) {
-    cursorPosition++;
+    cursorPosition = nextCodepointEnd(cursorPosition);
     editorRecalculateLines();
     ensureCursorVisible(storedVisibleLines);
   }
@@ -223,11 +281,10 @@ void editorMoveCursorUp() {
   int targetLine = cursorLine - 1;
   int lineStart = linePositions[targetLine];
   int lineEnd = (targetLine + 1 < lineCount) ? linePositions[targetLine + 1] : (int)textLength;
-  int lineLen = lineEnd - lineStart;
-  // Don't count trailing newline
-  if (lineLen > 0 && textBuffer[lineStart + lineLen - 1] == '\n') lineLen--;
+  // Don't count trailing newline.
+  if (lineEnd > lineStart && textBuffer[lineEnd - 1] == '\n') lineEnd--;
 
-  cursorPosition = lineStart + std::min(cursorCol, lineLen);
+  cursorPosition = byteOffsetForColumn(lineStart, lineEnd, cursorCol);
   editorRecalculateLines();
   ensureCursorVisible(storedVisibleLines);
 }
@@ -238,10 +295,9 @@ void editorMoveCursorDown() {
   int targetLine = cursorLine + 1;
   int lineStart = linePositions[targetLine];
   int lineEnd = (targetLine + 1 < lineCount) ? linePositions[targetLine + 1] : (int)textLength;
-  int lineLen = lineEnd - lineStart;
-  if (lineLen > 0 && textBuffer[lineStart + lineLen - 1] == '\n') lineLen--;
+  if (lineEnd > lineStart && textBuffer[lineEnd - 1] == '\n') lineEnd--;
 
-  cursorPosition = lineStart + std::min(cursorCol, lineLen);
+  cursorPosition = byteOffsetForColumn(lineStart, lineEnd, cursorCol);
   editorRecalculateLines();
   ensureCursorVisible(storedVisibleLines);
 }

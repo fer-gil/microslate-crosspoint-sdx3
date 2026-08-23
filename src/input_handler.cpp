@@ -34,6 +34,199 @@ static volatile bool queueFull = false;
 // --- CapsLock state ---
 static bool capsLockOn = false;
 
+// State used by the US-International helpers below.
+extern bool screenDirty;
+extern char renameBuffer[];
+extern int renameBufferLen;
+
+// US-International dead-key state.
+static char pendingDeadKey = 0;
+
+static bool isDeadKey(char c) {
+  return c == '\'' || c == '"' || c == '`' || c == '~' || c == '^';
+}
+
+static const char* composeDeadKey(char dead, char base) {
+  switch (dead) {
+    case '\'':
+      switch (base) {
+        case 'a': return "\xC3\xA1"; // á
+        case 'A': return "\xC3\x81"; // Á
+        case 'e': return "\xC3\xA9"; // é
+        case 'E': return "\xC3\x89"; // É
+        case 'i': return "\xC3\xAD"; // í
+        case 'I': return "\xC3\x8D"; // Í
+        case 'o': return "\xC3\xB3"; // ó
+        case 'O': return "\xC3\x93"; // Ó
+        case 'u': return "\xC3\xBA"; // ú
+        case 'U': return "\xC3\x9A"; // Ú
+        case 'y': return "\xC3\xBD"; // ý
+        case 'Y': return "\xC3\x9D"; // Ý
+      }
+      break;
+
+    case '"':
+      switch (base) {
+        case 'a': return "\xC3\xA4"; // ä
+        case 'A': return "\xC3\x84"; // Ä
+        case 'e': return "\xC3\xAB"; // ë
+        case 'E': return "\xC3\x8B"; // Ë
+        case 'i': return "\xC3\xAF"; // ï
+        case 'I': return "\xC3\x8F"; // Ï
+        case 'o': return "\xC3\xB6"; // ö
+        case 'O': return "\xC3\x96"; // Ö
+        case 'u': return "\xC3\xBC"; // ü
+        case 'U': return "\xC3\x9C"; // Ü
+        case 'y': return "\xC3\xBF"; // ÿ
+      }
+      break;
+
+    case '`':
+      switch (base) {
+        case 'a': return "\xC3\xA0"; // à
+        case 'A': return "\xC3\x80"; // À
+        case 'e': return "\xC3\xA8"; // è
+        case 'E': return "\xC3\x88"; // È
+        case 'i': return "\xC3\xAC"; // ì
+        case 'I': return "\xC3\x8C"; // Ì
+        case 'o': return "\xC3\xB2"; // ò
+        case 'O': return "\xC3\x92"; // Ò
+        case 'u': return "\xC3\xB9"; // ù
+        case 'U': return "\xC3\x99"; // Ù
+      }
+      break;
+
+    case '^':
+      switch (base) {
+        case 'a': return "\xC3\xA2"; // â
+        case 'A': return "\xC3\x82"; // Â
+        case 'e': return "\xC3\xAA"; // ê
+        case 'E': return "\xC3\x8A"; // Ê
+        case 'i': return "\xC3\xAE"; // î
+        case 'I': return "\xC3\x8E"; // Î
+        case 'o': return "\xC3\xB4"; // ô
+        case 'O': return "\xC3\x94"; // Ô
+        case 'u': return "\xC3\xBB"; // û
+        case 'U': return "\xC3\x9B"; // Û
+      }
+      break;
+
+    case '~':
+      switch (base) {
+        case 'a': return "\xC3\xA3"; // ã
+        case 'A': return "\xC3\x83"; // Ã
+        case 'n': return "\xC3\xB1"; // ñ
+        case 'N': return "\xC3\x91"; // Ñ
+        case 'o': return "\xC3\xB5"; // õ
+        case 'O': return "\xC3\x95"; // Õ
+      }
+      break;
+  }
+
+  return nullptr;
+}
+
+static void insertEditorText(const char* text) {
+  editorInsertText(text);
+  screenDirty = true;
+}
+
+static void handleEditorPrintable(char c) {
+  if (pendingDeadKey) {
+    char dead = pendingDeadKey;
+
+    // Dead key + Space or the same dead key prints the accent itself.
+    if (c == ' ' || c == dead) {
+      char literal[2] = {dead, '\0'};
+      pendingDeadKey = 0;
+      insertEditorText(literal);
+      return;
+    }
+
+    // A different dead key commits the old one and starts a new sequence.
+    if (isDeadKey(c)) {
+      char literal[2] = {dead, '\0'};
+      insertEditorText(literal);
+      pendingDeadKey = c;
+      return;
+    }
+
+    pendingDeadKey = 0;
+
+    if (const char* composed = composeDeadKey(dead, c)) {
+      insertEditorText(composed);
+      return;
+    }
+
+    // Unsupported combination: print both characters normally.
+    char literal[2] = {dead, '\0'};
+    char base[2] = {c, '\0'};
+    editorInsertText(literal);
+    editorInsertText(base);
+    screenDirty = true;
+    return;
+  }
+
+  if (isDeadKey(c)) {
+    pendingDeadKey = c;
+    return;
+  }
+
+  editorInsertChar(c);
+  screenDirty = true;
+}
+
+static void appendRenameText(const char* text) {
+  size_t n = strlen(text);
+  if (n == 0 || renameBufferLen + (int)n >= MAX_TITLE_LEN) return;
+
+  memcpy(renameBuffer + renameBufferLen, text, n);
+  renameBufferLen += (int)n;
+  renameBuffer[renameBufferLen] = '\0';
+  screenDirty = true;
+}
+
+static void handleRenamePrintable(char c) {
+  if (pendingDeadKey) {
+    char dead = pendingDeadKey;
+
+    if (c == ' ' || c == dead) {
+      char literal[2] = {dead, '\0'};
+      pendingDeadKey = 0;
+      appendRenameText(literal);
+      return;
+    }
+
+    if (isDeadKey(c)) {
+      char literal[2] = {dead, '\0'};
+      appendRenameText(literal);
+      pendingDeadKey = c;
+      return;
+    }
+
+    pendingDeadKey = 0;
+
+    if (const char* composed = composeDeadKey(dead, c)) {
+      appendRenameText(composed);
+      return;
+    }
+
+    char literal[2] = {dead, '\0'};
+    char base[2] = {c, '\0'};
+    appendRenameText(literal);
+    appendRenameText(base);
+    return;
+  }
+
+  if (isDeadKey(c)) {
+    pendingDeadKey = c;
+    return;
+  }
+
+  char text[2] = {c, '\0'};
+  appendRenameText(text);
+}
+
 // Where to return after title edit is confirmed or cancelled
 static UIState renameReturnState = UIState::FILE_BROWSER;
 
@@ -213,7 +406,15 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
     case HID_KEY_DOWN:      editorMoveCursorDown();  screenDirty = true; return;
     case HID_KEY_HOME:      editorMoveCursorHome();  screenDirty = true; return;
     case HID_KEY_END:       editorMoveCursorEnd();   screenDirty = true; return;
-    case HID_KEY_BACKSPACE: editorDeleteChar();      screenDirty = true; return;
+    case HID_KEY_BACKSPACE:
+      if (pendingDeadKey) {
+        pendingDeadKey = 0;
+        screenDirty = true;
+      } else {
+        editorDeleteChar();
+        screenDirty = true;
+      }
+      return;
     case HID_KEY_DELETE:    editorDeleteForward();   screenDirty = true; return;
   }
 
@@ -223,11 +424,10 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
     return;
   }
 
-  // Printable character
+  // Printable character — US International dead-key composition.
   char c = hidToAscii(keyCode, modifiers);
   if (c != 0) {
-    editorInsertChar(c);
-    screenDirty = true;
+    handleEditorPrintable(c);
   }
 }
 
@@ -276,20 +476,29 @@ static void handleRenameKey(uint8_t keyCode, uint8_t modifiers) {
   }
 
   if (keyCode == HID_KEY_BACKSPACE) {
+    if (pendingDeadKey) {
+      pendingDeadKey = 0;
+      screenDirty = true;
+      return;
+    }
+
     if (renameBufferLen > 0) {
       renameBufferLen--;
+      while (renameBufferLen > 0 &&
+             (((unsigned char)renameBuffer[renameBufferLen] & 0xC0) == 0x80)) {
+        renameBufferLen--;
+      }
       renameBuffer[renameBufferLen] = '\0';
       screenDirty = true;
     }
     return;
   }
 
-  // Allow all printable characters in a title (including spaces)
+  // Allow printable characters in a title, including US International
+  // dead-key composition.
   char c = hidToAscii(keyCode, modifiers);
-  if (c != 0 && c >= ' ' && renameBufferLen < MAX_TITLE_LEN - 1) {
-    renameBuffer[renameBufferLen++] = c;
-    renameBuffer[renameBufferLen] = '\0';
-    screenDirty = true;
+  if (c != 0 && c >= ' ') {
+    handleRenamePrintable(c);
   }
 }
 

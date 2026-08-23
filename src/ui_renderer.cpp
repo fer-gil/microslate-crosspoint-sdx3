@@ -313,12 +313,15 @@ static void drawEditorLine(GfxRenderer& renderer, int lineIdx, int x, int yPos,
 static void drawEditorCursor(GfxRenderer& renderer, int cursorY, int lineHeight,
                              int sw, bool tc) {
   int curLine = editorGetCursorLine();
-  int curCol = editorGetCursorCol();
+  int cursorPos = editorGetCursorPosition();
   char* buf = editorGetBuffer();
 
   int lineStart = editorGetLinePosition(curLine);
   char prefix[256];
-  int prefixLen = (curCol < (int)sizeof(prefix) - 1) ? curCol : (int)sizeof(prefix) - 1;
+  int prefixBytes = cursorPos - lineStart;
+  int prefixLen = (prefixBytes < (int)sizeof(prefix) - 1)
+                    ? prefixBytes
+                    : (int)sizeof(prefix) - 1;
   strncpy(prefix, buf + lineStart, prefixLen);
   prefix[prefixLen] = '\0';
 
