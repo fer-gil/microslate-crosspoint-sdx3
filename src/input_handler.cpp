@@ -330,7 +330,8 @@ static void dispatchEvent(const KeyEvent& event) {
     case UIState::FILE_BROWSER: {
       int fc = getFileCount();
 
-      // Delete confirmation pending — Enter confirms, anything else cancels
+      // Delete confirmation pending — stay here until Enter or Esc.
+      // Ignore stray keyboard events so they cannot silently cancel deletion.
       if (deleteConfirmPending) {
         if (event.keyCode == HID_KEY_ENTER && fc > 0) {
           FileInfo* files = getFileList();
@@ -338,9 +339,12 @@ static void dispatchEvent(const KeyEvent& event) {
           int newFc = getFileCount();
           if (selectedFileIndex >= newFc) selectedFileIndex = newFc - 1;
           if (selectedFileIndex < 0) selectedFileIndex = 0;
+          deleteConfirmPending = false;
+          screenDirty = true;
+        } else if (event.keyCode == HID_KEY_ESCAPE) {
+          deleteConfirmPending = false;
+          screenDirty = true;
         }
-        deleteConfirmPending = false;
-        screenDirty = true;
         break;
       }
 

@@ -105,6 +105,8 @@ static void detectOtaApps() {
         OtaAppEntry& entry = otaApps[otaAppCount];
         if (nvsName.length() > 0) {
           strncpy(entry.name, nvsName.c_str(), sizeof(entry.name) - 1);
+        } else if (slot == 0) {
+          strncpy(entry.name, "CrossPoint", sizeof(entry.name) - 1);
         } else {
           snprintf(entry.name, sizeof(entry.name), "OTA Slot %d", slot);
         }
