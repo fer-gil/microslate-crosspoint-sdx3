@@ -56,3 +56,12 @@ and navigation, save readback/short writes/open failures/rename failures,
 backup recovery, extension preservation/collisions, autosave timing and timer
 wraparound, Ctrl report-ID ambiguity, byte-exact Wi-Fi transfer, and Pandoc AST
 validation of repeated and multiline notes. These do not replace hardware tests.
+
+
+## Installed firmware compatibility
+
+The inspected device runs MicroSlate `292a14f`, from the separate
+`fix/k70-14byte-crosspoint` branch. This branch is merged to preserve its
+CrossPoint menu, K70 14-byte BLE reports and US-International keyboard. Host tests
+cover those reports and real input composition, including literal `[^a]` footnote
+identifiers. Body text migrates one step smaller (14), once; Ctrl+F still persists.

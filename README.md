@@ -10,6 +10,9 @@ New notes use `.md`; legacy `.txt` files retain their extension. In Markdown
 notes, the active paragraph exposes source and inactive paragraphs hide supported
 markers. Ctrl+M toggles visual/source view. ATX headings, bold, italic, lists and
 named Pandoc footnotes are supported; definitions render in source order.
+The installed `292a14f` keyboard/dual-boot branch is integrated: Corsair K70
+14-byte BLE reports, US-International accents and the CrossPoint return menu.
+Body text starts one step smaller (14); Ctrl+F still changes it.
 The new firmware has not yet been validated on the physical X3.
 
 The remaining documentation describes the upstream baseline.

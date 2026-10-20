@@ -6,6 +6,11 @@ Read `docs/X3-INSTALL-ES.md` before proposing a device update.
 - `feature/markdown-visual-editor`, PR #1, implements a Markdown preview.
 - Source is authoritative; never strip markers on save. New notes are `.md`,
   legacy `.txt` notes keep their extension, including on rename.
+- Preserve installed commit `292a14f` (`fix/k70-14byte-crosspoint`): Corsair
+  K70 14-byte reports, BLE input subscription, US-International composition and
+  the CrossPoint return menu. It was on a separate branch, not main.
+- Body text starts at 14 instead of 16, with one-time migration of large settings;
+  later Ctrl+F changes still persist.
 - Keep the 10-second idle / two-minute continuous autosave policy and safe writes.
 - Host validation: `sh tests/run.sh`, `python3 tests/test_sync.py`,
   `python3 tests/test_pandoc.py` (requires Pandoc).

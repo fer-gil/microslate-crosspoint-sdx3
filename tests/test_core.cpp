@@ -55,6 +55,7 @@ static void parserAndEditor() {
   assert(view()=="*literal* a_b_c **sin cerrar `**code**`\n\n");
   load("```md\n**literal**\n```\n\n");
   assert(view()=="```md\n**literal**\n```\n\n");
+  load(""); editorInsertText("áñ🙂"); assert(std::string(editorGetBuffer())=="áñ🙂");
   load("áñ🙂"); editorMoveCursorLeft(); assert(editorGetCursorPosition()==4);
   editorDeleteChar(); assert(std::string(editorGetBuffer())=="á🙂");
   editorDeleteForward(); assert(std::string(editorGetBuffer())=="á");
@@ -131,4 +132,8 @@ int main() {
   uint8_t compact[7]={1,0x16,0,0,0,0,0};
   assert(normalizeKeyboardReport(compact,7,1,out) && memcmp(out,ctrl,8)==0);
   assert(!normalizeKeyboardReport(compact,6,1,out));
+  uint8_t k70[14]={1,0,0,0x16,0,0,0,0,0,0,0,0,0,0};
+  assert(normalizeKeyboardReport(k70,14,1,out) && memcmp(out,ctrl,8)==0);
+  uint8_t k70release[14]={0};
+  assert(normalizeKeyboardReport(k70release,14,1,out) && out[0]==0 && out[2]==0);
   parserAndEditor(); filesAndFailures(); std::cout<<"Parser, source mapping, UTF-8, wrapping, formats and save failure tests passed.\n"; }

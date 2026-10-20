@@ -157,23 +157,19 @@ int editorGetWordCount() {
   return count;
 }
 
+void editorInsertText(const char* text) {
+  if (!text || !text[0]) return;
+  size_t count = strlen(text);
+  if (textLength + count >= TEXT_BUFFER_SIZE) return;
+  memmove(textBuffer + cursorPosition + count, textBuffer + cursorPosition, textLength - cursorPosition + 1);
+  memcpy(textBuffer + cursorPosition, text, count);
+  cursorPosition += count; textLength += count;
+  unsavedChanges = true; lineBreaksDirty = true; parseDirty = true;
+  editorRecalculateLines(); ensureCursorVisible(storedVisibleLines);
+}
 void editorInsertChar(char c) {
-  if (textLength >= TEXT_BUFFER_SIZE - 1) return;
-
-  // Shift text right
-  for (int i = (int)textLength; i > cursorPosition; i--) {
-    textBuffer[i] = textBuffer[i - 1];
-  }
-  textBuffer[cursorPosition] = c;
-  cursorPosition++;
-  textLength++;
-  textBuffer[textLength] = '\0';
-  unsavedChanges = true;
-  lineBreaksDirty = true;
-  parseDirty = true;
-
-  editorRecalculateLines();
-  ensureCursorVisible(storedVisibleLines);
+  char text[2] = {c, '\0'};
+  editorInsertText(text);
 }
 
 void editorDeleteChar() {

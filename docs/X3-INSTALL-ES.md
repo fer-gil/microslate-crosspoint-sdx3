@@ -28,8 +28,10 @@ La versión nueva debe probarse en el dispositivo antes de considerarla estable.
 5. Comprueba la tabla de particiones de **tu unidad**: `app0=0x10000`,
    `app1=0x650000`, cada una de `0x640000` bytes. Verifica que `app1` contiene
    MicroSlate, no CrossPoint, y que CrossPoint arranca y permite abrir MicroSlate.
-6. Confirma la forma de regresar de MicroSlate a CrossPoint. Esta actualización
-   no cambia el mecanismo de arranque ni añade un menú de retorno.
+6. El usuario confirmó que regresa desde la entrada **CrossPoint** al final del
+   menú de MicroSlate. Se integraron el menú y las correcciones del firmware
+   instalado `292a14f` (rama `fix/k70-14byte-crosspoint`). La selección de arranque
+   ahora comprueba errores antes de reiniciar. Verifica este retorno tras instalar.
 7. Comprueba `SHA256SUMS.txt` del paquete. El `.bin` debe ser una aplicación
    ESP32-C3 válida y ocupar menos de `0x640000` bytes.
 
@@ -112,10 +114,15 @@ a esa misma unidad y partición. No restaures toda la memoria como primer paso.
    Para comprobar Pandoc: `pandoc -f markdown+footnotes prueba-markdown.md -o prueba.html`.
 
 Límite de edición: 16 383 bytes por nota. Se rechazan archivos mayores para
-impedir guardados truncados. El lector BLE sigue orientado a reportes de teclado
-HID de 6 teclas; no implementa todos los formatos NKRO ni una distribución de
-teclado española. La entrada física conserva el mapa ASCII estadounidense del
-firmware anterior; los archivos UTF-8 se conservan y navegan por caracteres.
+impedir guardados truncados. Se conservan las correcciones del teclado instalado: reportes Corsair K70 de
+14 bytes, suscripción BLE y composición US-International (`'` + `a` → `á`,
+`~` + `n` → `ñ`). No implementa todos los formatos NKRO. Para escribir un acento
+literal, pulsa el acento y después Espacio; el `^` después de `[` se introduce
+literalmente para permitir notas `[^a]`. Se conserva y navega el texto UTF-8.
+
+La letra del cuerpo empieza un nivel más pequeña (14 en vez de 16). La migración
+se aplica una sola vez si tenías el tamaño grande; Ctrl+F permite cambiarlo y
+la elección posterior se conserva. Los encabezados mantienen su énfasis visual.
 
 Este es un subconjunto de Markdown. Sintaxis no implementada (tablas, enlaces,
 matemáticas, etc.) permanece como fuente. Las notas al pie usan `[^id]` y

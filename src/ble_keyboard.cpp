@@ -255,9 +255,26 @@ static bool setupHidConnection() {
           DBG_PRINTF("[BLE]     Report ref: ID=%d Type=%d\n",
                      (uint8_t)refData[0], (uint8_t)refData[1]);
           if ((uint8_t)refData[1] == 1) {
+            uint8_t candidateReportId = (uint8_t)refData[0];
+
+            DBG_PRINTF("[BLE]     -> Input report candidate (reportId=%d, notify=%d)\n",
+                       candidateReportId, chr->canNotify());
+
+            if (!chr->canNotify()) {
+              DBG_PRINTLN("[BLE]        Cannot notify, skipping");
+              continue;
+            }
+
+            if (!chr->subscribe(true, onKeyboardNotify)) {
+              DBG_PRINTLN("[BLE]        Subscribe failed, skipping");
+              continue;
+            }
+
             pInputReportChar = chr;
-            inputReportId = (uint8_t)refData[0];  // 0 = no ID prefix, non-zero = ID byte present
-            DBG_PRINTF("[BLE]     -> Selected as input report (reportId=%d)\n", inputReportId);
+            inputReportId = candidateReportId;
+
+            DBG_PRINTF("[BLE]        Subscribed to input report (reportId=%d, handle=%d)\n",
+                       inputReportId, chr->getHandle());
             break;
           }
         }
