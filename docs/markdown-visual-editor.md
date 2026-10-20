@@ -65,3 +65,18 @@ The inspected device runs MicroSlate `292a14f`, from the separate
 CrossPoint menu, K70 14-byte BLE reports and US-International keyboard. Host tests
 cover those reports and real input composition, including literal `[^a]` footnote
 identifiers. Body text migrates one step smaller (14), once; Ctrl+F still persists.
+
+
+## Input stability follow-up
+
+Hardware feedback exposed missed physical taps while the e-paper driver blocks
+loop(), a reconnect path that discarded bonds, and an apparent cursor reversal.
+X3 buttons now sample every 10 ms outside rendering and latch press/release
+transitions. ADC outliers/errors are rejected and each ladder debounces
+independently. A deterministic test samples an entire tap during a simulated
+500 ms render stall and verifies it is dispatched afterwards.
+
+BLE reconnect retains existing bonds and updates the visible status on ready or
+disconnect. Cursor-only moves use a scrub refresh to clear the old caret. Debug
+logs distinguish BLE reports, latched physical input and actual source offsets;
+physical validation remains required for every reported symptom.

@@ -17,3 +17,8 @@ ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror -DRELEASE_BUILD -g \
   -Isrc -Itests/fakes tests/test_input.cpp src/markdown.cpp src/text_editor.cpp \
   "$discard" -o "$out/test_input"
 "$out/test_input"
+${CXX:-c++} -std=c++17 -Wall -Wextra -Werror -DRELEASE_BUILD -DINPUT_MANAGER_TEST -g \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -Itests/fakes -Ilib/InputManager/include tests/test_buttons.cpp lib/InputManager/src/InputManager.cpp \
+  -o "$out/test_buttons"
+"$out/test_buttons"

@@ -309,20 +309,12 @@ void enterDeepSleep(SleepReason reason) {
 // Translate physical button presses to HID key codes
 // NOTE: gpio.update() is called in loop() before this function
 static void processPhysicalButtons() {
-  static bool btnUpLast = false;
-  static bool btnDownLast = false;
-  static bool btnLeftLast = false;
-  static bool btnRightLast = false;
-  static bool btnConfirmLast = false;
-  static bool btnBackLast = false;
 
-  // Use isPressed() — persistent debounced state.  With one-shot scanning
-  // (radio quiet during navigation), InputManager debounce works reliably.
+  // Current states drive holds; latched press events retain short taps during refresh.
   bool btnUp      = gpio.isPressed(HalGPIO::BTN_UP);
   bool btnDown    = gpio.isPressed(HalGPIO::BTN_DOWN);
   bool btnLeft    = gpio.isPressed(HalGPIO::BTN_LEFT);
   bool btnRight   = gpio.isPressed(HalGPIO::BTN_RIGHT);
-  bool btnConfirm = gpio.isPressed(HalGPIO::BTN_CONFIRM);
   bool btnBack    = gpio.isPressed(HalGPIO::BTN_BACK);
 
   // Power button state machine for proper long/short press handling
@@ -396,34 +388,34 @@ static void processPhysicalButtons() {
   // Map physical buttons to HID key codes based on current UI state
   switch (currentState) {
     case UIState::MAIN_MENU:
-      if ((btnUp && !btnUpLast) || (btnRight && !btnRightLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_RIGHT)) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
         enqueueKeyEvent(HID_KEY_UP, 0, false);
       }
-      if ((btnDown && !btnDownLast) || (btnLeft && !btnLeftLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_DOWN) || gpio.wasPressed(HalGPIO::BTN_LEFT)) {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
       break;
 
     case UIState::FILE_BROWSER:
-      if (((btnUp && !btnUpLast) || (btnRight && !btnRightLast)) && getFileCount() > 0) {
+      if ((gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_RIGHT)) && getFileCount() > 0) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
         enqueueKeyEvent(HID_KEY_UP, 0, false);
       }
-      if (((btnDown && !btnDownLast) || (btnLeft && !btnLeftLast)) && getFileCount() > 0) {
+      if ((gpio.wasPressed(HalGPIO::BTN_DOWN) || gpio.wasPressed(HalGPIO::BTN_LEFT)) && getFileCount() > 0) {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
-      if (btnConfirm && !btnConfirmLast && getFileCount() > 0) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM) && getFileCount() > 0) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
@@ -449,9 +441,16 @@ static void processPhysicalButtons() {
       else if (btnLeft)  heldKey = HID_KEY_LEFT;
       else if (btnRight) heldKey = HID_KEY_RIGHT;
 
+      uint8_t tappedKey = 0;
+      if (gpio.wasPressed(HalGPIO::BTN_UP)) tappedKey = HID_KEY_UP;
+      else if (gpio.wasPressed(HalGPIO::BTN_DOWN)) tappedKey = HID_KEY_DOWN;
+      else if (gpio.wasPressed(HalGPIO::BTN_LEFT)) tappedKey = HID_KEY_LEFT;
+      else if (gpio.wasPressed(HalGPIO::BTN_RIGHT)) tappedKey = HID_KEY_RIGHT;
+      if (tappedKey) fireKey(tappedKey);
+
       if (heldKey != repeatKey) {
         // Key changed — fire immediately on press
-        if (heldKey != 0) fireKey(heldKey);
+        if (heldKey != 0 && heldKey != tappedKey) fireKey(heldKey);
         repeatKey   = heldKey;
         repeatStart = millis();
         lastRepeat  = millis();
@@ -463,12 +462,13 @@ static void processPhysicalButtons() {
         }
       }
 
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         if (editorHasUnsavedChanges()) saveCurrentFile();
+        if (editorHasUnsavedChanges()) { screenDirty = true; return; }
         currentState = UIState::FILE_BROWSER;
         screenDirty = true;
       }
@@ -477,95 +477,95 @@ static void processPhysicalButtons() {
 
     case UIState::RENAME_FILE:
     case UIState::NEW_FILE:
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
       break;
 
     case UIState::BLUETOOTH_SETTINGS:
-      if (btnUp && !btnUpLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_UP)) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
         enqueueKeyEvent(HID_KEY_UP, 0, false);
       }
-      if (btnDown && !btnDownLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_DOWN)) {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
-      if (btnRight && !btnRightLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_RIGHT)) {
         enqueueKeyEvent(HID_KEY_RIGHT, 0, true);  // Scan
         enqueueKeyEvent(HID_KEY_RIGHT, 0, false);
       }
-      if (btnLeft && !btnLeftLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_LEFT)) {
         enqueueKeyEvent(HID_KEY_LEFT, 0, true);   // Disconnect
         enqueueKeyEvent(HID_KEY_LEFT, 0, false);
       }
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
       break;
 
     case UIState::PAIRED_KEYBOARDS:
-      if ((btnUp && !btnUpLast) || (btnRight && !btnRightLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_RIGHT)) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
         enqueueKeyEvent(HID_KEY_UP, 0, false);
       }
-      if ((btnDown && !btnDownLast) || (btnLeft && !btnLeftLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_DOWN) || gpio.wasPressed(HalGPIO::BTN_LEFT)) {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
       break;
 
     case UIState::WIFI_SYNC:
-      if ((btnUp && !btnUpLast) || (btnRight && !btnRightLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_RIGHT)) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
         enqueueKeyEvent(HID_KEY_UP, 0, false);
       }
-      if ((btnDown && !btnDownLast) || (btnLeft && !btnLeftLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_DOWN) || gpio.wasPressed(HalGPIO::BTN_LEFT)) {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
       break;
 
     case UIState::SETTINGS:
-      if ((btnUp && !btnUpLast) || (btnRight && !btnRightLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_RIGHT)) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
         enqueueKeyEvent(HID_KEY_UP, 0, false);
       }
-      if ((btnDown && !btnDownLast) || (btnLeft && !btnLeftLast)) {
+      if (gpio.wasPressed(HalGPIO::BTN_DOWN) || gpio.wasPressed(HalGPIO::BTN_LEFT)) {
         enqueueKeyEvent(HID_KEY_DOWN, 0, true);
         enqueueKeyEvent(HID_KEY_DOWN, 0, false);
       }
-      if (btnConfirm && !btnConfirmLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
-      if (btnBack && !btnBackLast) {
+      if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
         enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
@@ -575,13 +575,6 @@ static void processPhysicalButtons() {
       break;
   }
 
-  // Update last state
-  btnUpLast = btnUp;
-  btnDownLast = btnDown;
-  btnLeftLast = btnLeft;
-  btnRightLast = btnRight;
-  btnConfirmLast = btnConfirm;
-  btnBackLast = btnBack;
 }
 
 // Global variable for activity tracking
@@ -654,9 +647,20 @@ void loop() {
   // Process WiFi sync HTTP clients when active
   if (isWifiSyncActive()) wifiSyncLoop();
 
-  // CRITICAL: Process buttons BEFORE checking wasAnyPressed() to avoid consuming button states
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased()) {
+    unsigned pressed=0,released=0;
+    for (int i=0;i<7;++i) {
+      if(gpio.wasPressed(i)) pressed|=1u<<i;
+      if(gpio.wasReleased(i)) released|=1u<<i;
+    }
+    DBG_PRINTF("[BUTTON] press=0x%02x release=0x%02x\n",pressed,released);
+  }
+  // Dispatch latched taps even if the panel was busy for the whole press.
   processPhysicalButtons();
-  int inputEventsProcessed = processAllInput(); // Assuming this returns number of events processed
+  int cursorBefore = editorGetCursorPosition();
+  int inputEventsProcessed = processAllInput();
+  if (currentState == UIState::TEXT_EDITOR && cursorBefore != editorGetCursorPosition())
+    DBG_PRINTF("[CURSOR] %d -> %d\n", cursorBefore, editorGetCursorPosition());
 
   // Register activity AFTER button processing (don't consume button states prematurely)
   static unsigned long lastInputTime = 0;

@@ -69,6 +69,15 @@ static void parserAndEditor() {
   for(int i=0;i<10;++i) editorMoveCursorDown();
   for(int i=0;i<10;++i) editorMoveCursorUp();
   assert(std::string(editorGetBuffer())=="WWW abc áñ🙂 def\n\n");
+  load("**a** café\nx\n\n");
+  while(editorGetCursorPosition()) {
+    int before=editorGetCursorPosition();
+    int expected=markdown::previous(editorGetBuffer(),before);
+    editorMoveCursorLeft();
+    // Renderer configuration/reflow must not undo a left movement.
+    editorSetCharsPerLine(60); editorSetLayout(7,measure,1); editorRecalculateLines();
+    assert(editorGetCursorPosition()==expected);
+  }
   assert(isNoteFile("a.MD") && isNoteFile("a.TxT") && !isNoteFile("a.md.tmp"));
   // Arbitrary bounded input: no out-of-range writes, monotonic UTF-8 offsets,
   // terminating parser even with thousands of malformed delimiters.

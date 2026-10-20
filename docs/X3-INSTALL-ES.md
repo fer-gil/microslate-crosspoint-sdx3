@@ -127,3 +127,14 @@ la elección posterior se conserva. Los encabezados mantienen su énfasis visual
 Este es un subconjunto de Markdown. Sintaxis no implementada (tablas, enlaces,
 matemáticas, etc.) permanece como fuente. Las notas al pie usan `[^id]` y
 `[^id]: contenido` con continuaciones indentadas, compatibles con Pandoc.
+
+
+### Comprobar la corrección de entrada
+
+Prueba botones inmediatamente después de entrar a MicroSlate y también mientras
+cambia la pantalla, con el teclado apagado. Después enciende el K70, escribe una
+nota de prueba y pulsa izquierda una sola vez. Comprueba que el cursor se queda
+en su nueva posición. Sal y vuelve a MicroSlate para verificar reconexión sin
+volver a emparejar. `~` seguido de `n` produce `ñ`; `~` seguido de `N` produce `Ñ`.
+Si falla algún paso, conserva la nota guardada e indica el paso exacto antes de
+seguir usando esta versión.

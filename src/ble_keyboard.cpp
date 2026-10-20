@@ -88,6 +88,7 @@ static void pruneStaleDevices() {
 // Keyboard notification callback
 static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
                               uint8_t* pData, size_t length, bool isNotify) {
+  DBG_PRINTF("[KB] handle=%d len=%d\n", pRemChar->getHandle(), static_cast<int>(length));
   uint8_t newReport[8] = {0};
   if (!normalizeKeyboardReport(pData, length, inputReportId, newReport)) {
     DBG_PRINTF("[KB-Notify] Ignoring %d-byte report (not keyboard format)\n", (int)length);
@@ -162,7 +163,8 @@ static class ClientCallbacks : public NimBLEClientCallbacks {
     authSuccess = false;
     memset(lastReport, 0, 8);
     lastReconnectAttempt = millis();
-    DBG_PRINTLN("[BLE] Disconnected");
+    DBG_PRINTF("[BLE] Disconnected, reason=%d\n", reason);
+    extern bool screenDirty; screenDirty = true;
   }
 
   bool onConnParamsUpdateRequest(NimBLEClient* pClient,
@@ -371,10 +373,9 @@ static void bleConnectTask(void* param) {
 
   // Step 1: Connect (blocks this task, main loop continues)
   NimBLEAddress addr(keyboardAddress, keyboardAddressType);
-  // Delete any stored bond before connecting — forces a fresh "Just Works" pairing
-  // instead of an encrypted reconnect. Prevents a NimBLE security-state crash when
-  // the keyboard still holds a stale connection from a previous unclean disconnect.
-  NimBLEDevice::deleteBond(addr);
+  // Reconnect with the existing encryption keys. Deleting only our half of the
+  // bond makes the keyboard retain keys that no longer match this host.
+  // Forget/remove remains the explicit path for clearing a damaged pairing.
   if (!pClient->connect(addr, true)) {
     DBG_PRINTLN("[BLE-Task] Connection failed");
     bleState = BLEState::DISCONNECTED;
@@ -425,6 +426,8 @@ static void bleConnectTask(void* param) {
   bleConnIdleMode = false;
   lastBleKeystrokeMs = millis();  // Start the 3s idle timer from now, not from boot
   DBG_PRINTLN("[BLE-Task] Keyboard ready!");
+  extern bool screenDirty;
+  screenDirty = true;
 
   // NOTE: updateConnParams() is intentionally NOT called here.  Calling it immediately
   // after connecting triggers a reentrancy crash with Keychron keyboards (the keyboard

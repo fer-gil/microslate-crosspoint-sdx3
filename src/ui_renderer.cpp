@@ -396,6 +396,15 @@ static int drawEditorHeader(GfxRenderer& renderer, HalGPIO& gpio, int sw, bool t
 }
 
 void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
+  // Cursor-only moves need a scrub waveform to erase the previous thin caret.
+  // A fast differential can leave it visible on this UC8253 panel.
+  static int lastRenderedCursor = -1;
+  static size_t lastRenderedLength = 0;
+  int cursor = editorGetCursorPosition();
+  size_t length = editorGetLength();
+  auto editorRefresh = (cursor != lastRenderedCursor && length == lastRenderedLength)
+      ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  lastRenderedCursor = cursor; lastRenderedLength = length;
   renderer.clearScreen();
   int sw = renderer.getScreenWidth();
   int sh = renderer.getScreenHeight();
@@ -429,7 +438,7 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
 
     editorSetVisibleLines(1);
 
-    renderer.beginRefresh(HalDisplay::FAST_REFRESH);
+    renderer.beginRefresh(editorRefresh);
     return;
   }
 
@@ -471,7 +480,7 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
       drawEditorCursor(renderer, cursorY, lineHeight, sw, tc);
     }
 
-    renderer.beginRefresh(HalDisplay::FAST_REFRESH);
+    renderer.beginRefresh(editorRefresh);
     return;
   }
 
@@ -498,7 +507,7 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
     drawEditorCursor(renderer, cursorY, lineHeight, sw, tc);
   }
 
-  renderer.beginRefresh(HalDisplay::FAST_REFRESH);
+  renderer.beginRefresh(editorRefresh);
 }
 
 void drawRenameScreen(GfxRenderer& renderer, HalGPIO& gpio) {

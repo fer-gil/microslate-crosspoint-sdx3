@@ -13,6 +13,8 @@ class InputManager {
    * Updates the button states. Should be called regularly in the main loop.
    */
   void update();
+  // Sample independently of rendering; update() consumes the latched transitions.
+  void poll();
 
   /**
    * Returns true if the button was being held at the time of the last #update() call.
@@ -86,11 +88,15 @@ class InputManager {
  private:
   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
 
+  uint8_t pendingPressed = 0;
+  uint8_t pendingReleased = 0;
+  uint8_t sampledState = 0;
+  bool samplerStarted = false;
   uint8_t currentState;
-  uint8_t lastState;
   uint8_t pressedEvents;
   uint8_t releasedEvents;
-  unsigned long lastDebounceTime;
+  uint8_t candidateGroup[3] = {0,0,0};
+  unsigned long candidateSince[3] = {0,0,0};
   unsigned long buttonPressStart;
   unsigned long buttonPressFinish;
 
