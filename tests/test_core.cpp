@@ -27,6 +27,15 @@ static int measure(const char* g,uint8_t f) {
   return (g[0]=='W' ? 3 : 1) + ((f&markdown::Bold) ? 1 : 0);
 }
 static void parserAndEditor() {
+  std::string styled="# Title\n\n**bold** *italic* ***both***\n\n- item\n";
+  std::vector<uint8_t> flags(styled.size());
+  markdown::parse(styled.data(),styled.size(),flags.data());
+  assert(flags[styled.find("Title")] & markdown::Heading);
+  assert(flags[styled.find("bold")] & markdown::Bold);
+  assert(flags[styled.find("italic")] & markdown::Italic);
+  assert((flags[styled.find("both")] & (markdown::Bold|markdown::Italic)) == (markdown::Bold|markdown::Italic));
+  assert(flags[styled.find("- item")] & markdown::Bullet);
+
   std::string raw="# Introducción\n\n**fuerte** *suave* ***ambas***\n\n- café[^nota]\n\n[^nota]: pie\n    continuación\n\n";
   load(raw);
   assert(view()=="Introducción\n\nfuerte suave ambas\n\n• café[nota]\n\n[nota] pie\n    continuación\n\n");
@@ -74,7 +83,7 @@ static void parserAndEditor() {
   }
 }
 static void filesAndFailures() {
-  for(int failure=0;failure<6;++failure) {
+  for(int failure=0;failure<7;++failure) {
     SdMan=FakeSD{}; SdMan.files["/notes/test.md"]="old";
     load("**nuevo**\n"); editorSetUnsavedChanges(true);
     if(failure==1) SdMan.shortWrite=true;
@@ -82,6 +91,7 @@ static void filesAndFailures() {
     if(failure==3) SdMan.failRenameFrom="/notes/test.md";
     if(failure==4) SdMan.failRenameFrom="/notes/test.md.tmp";
     if(failure==5) SdMan.failOpen=true;
+    if(failure==6) { SdMan.files["/notes/test.md.bak"]="older"; SdMan.failRemove="/notes/test.md.bak"; }
     saveCurrentFile(false);
     if(failure==0) {
       assert(!editorHasUnsavedChanges()); assert(!fileManagerSaveFailed());

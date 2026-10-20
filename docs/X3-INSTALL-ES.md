@@ -21,7 +21,10 @@ La versión nueva debe probarse en el dispositivo antes de considerarla estable.
    El registro de la unidad examinada identificó ESP32-C3 rev. 0.4, X3,
    16 MB, CrossPoint `1.4.1-dev-feature/writer-x3-98979f6a` en `app0`
    y MicroSlate detectado en `app1`. Esto no identifica por sí solo el panel.
-   Si el MicroSlate instalado usa un controlador distinto, detente.
+   La aplicación MicroSlate extraída de la copia contiene el identificador
+   UC8253; su versión interna es `292a14f`. Esto confirma el perfil del firmware
+   anterior que el usuario reporta operativo, aunque no prueba la revisión física
+   del panel. Si el MicroSlate instalado usa otro controlador, detente.
 5. Comprueba la tabla de particiones de **tu unidad**: `app0=0x10000`,
    `app1=0x650000`, cada una de `0x640000` bytes. Verifica que `app1` contiene
    MicroSlate, no CrossPoint, y que CrossPoint arranca y permite abrir MicroSlate.

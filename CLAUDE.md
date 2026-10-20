@@ -15,7 +15,7 @@ Read `docs/X3-INSTALL-ES.md` before proposing a device update.
 - On the inspected unit, CrossPoint boots from app0 and detects MicroSlate in
   app1 (`0x650000`, size `0x640000`). Keep CrossPoint and boot data intact.
 - Historical notes claimed USB was locked and recommended SD update.bin.
-  USB readback is now being verified; never assume SD updates target the correct
+  USB readback of all 16 MB succeeded; never assume SD updates target the correct
   slot or that a generic merged image preserves this dual boot.
 - Current CrossPoint reports X3; that alone does not distinguish panel variants.
 - The owner confirmed pairing and typing in the previously installed MicroSlate.
