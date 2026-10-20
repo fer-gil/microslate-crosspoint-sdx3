@@ -24,6 +24,8 @@ jobs:
         run: pip install platformio==6.1.19
       - name: Build MicroSlate for X3 UC8253
         run: pio run -e xteink_x3 | tee build-x3.log
+      - name: Test real patched NimBLE disconnect callback
+        run: python tests/test_nimble_disconnect.py --require-applied
       - name: Package application only
         run: |
           mkdir package
