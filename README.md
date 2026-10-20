@@ -34,7 +34,7 @@ A dedicated writing firmware for the **Xteink X4** e-paper device. Pairs with an
 - **Clean Mode** — hides all UI chrome while editing so only your text is on screen (Ctrl+Z to toggle)
 - **Dark Mode** — inverted display
 - **Display Orientation** — portrait, landscape, and inverted variants
-- **Power Management** — ESP-IDF light sleep between loop iterations (CPU drops to 10MHz), BLE modem sleep keeps the radio alive, SD card sleeps between accesses, display analog circuits power down after each refresh, and the device enters deep sleep after 5 minutes of inactivity
+- **Power Management** — Interactive sessions currently stay at 80 MHz with automatic light sleep disabled while an intermittent CrossPoint-to-MicroSlate startup freeze is investigated. This can increase active battery use; no battery-life measurement is claimed. BLE radio modem sleep, SD/display power management and deep sleep after five minutes remain enabled. USB diagnostic writes have a bounded 1 ms timeout; a zero timeout is avoided on the installed Arduino core.
 - **WiFi Sync** — one-button backup of all notes to your PC over WiFi. Saves network credentials for instant reconnect. Read-only server — nothing on the device can be modified over the network
 - **Standalone Build** — all libraries are bundled in the repo; no sibling projects required
 - **Dual-Boot** — optional combined firmware that includes CrossPoint (an e-reader) in a second OTA slot. A "CrossPoint" entry appears in the main menu; selecting it reboots into the reader. CrossPoint gains a reciprocal "MicroSlate" entry. Both apps work normally when flashed standalone.
@@ -322,3 +322,7 @@ If MicroSlate is useful to you and you'd like to say thanks, you can support the
 ### Save failure recovery
 
 If saving fails on exit or Ctrl+N, the text remains in memory. The recovery screen offers Retry saving, Keep editing (default), and Discard changes and leave. Esc returns to editing. Navigate with arrows or physical buttons and confirm with Enter/Confirm. Discard is explicit and leaves the last saved disk version unchanged. USB reset or power loss can still lose unsaved memory.
+
+### Intermittent startup freeze investigation
+
+The owner confirmed the create/save/exit correction in 910c0c9, but physical buttons and initial BLE connection can still freeze when entering from CrossPoint; a USB reset recovers them. The previous brief successful input test did not establish startup reliability. The new awake-session policy is a diagnostic mitigation, not a proven root cause. Validate three CrossPoint → MicroSlate round trips without reconnecting USB, then repeat on battery with the keyboard off/on. Keep notes saved before resetting. `[ALIVE]` logs every five seconds indicate main-loop progress.

@@ -191,9 +191,27 @@ static void updateScreen() {
 
 void setup() {
   DBG_INIT();
+#if ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
+  // USB diagnostics must not hold up buttons/BLE when a host disappears.
+  // Do not use zero: this Arduino HWCDC version decrements an unsigned timeout.
+  Serial.setTxTimeoutMs(1);
+#endif
   DBG_PRINTLN("MicroSlate Markdown preview - X3 UC8253 - " __DATE__ " " __TIME__);
 
   setCpuFrequencyMhz(80);
+
+  // Keep the interactive session awake, including the first seconds before BLE
+  // connects. The previous 10 MHz/tickless-light-sleep policy can gate USB and
+  // ADC clocks across the CrossPoint -> MicroSlate restart. Until repeated
+  // battery-powered transitions are verified, prefer responsiveness over DFS.
+  // BLE radio modem sleep and explicit five-minute deep sleep remain available.
+  esp_pm_config_esp32c3_t pm_config = {
+    .max_freq_mhz = 80,
+    .min_freq_mhz = 80,
+    .light_sleep_enable = false
+  };
+  esp_err_t pm_err = esp_pm_configure(&pm_config);
+  DBG_PRINTF("[POWER] interactive 80 MHz, automatic light sleep OFF: %s\n", esp_err_to_name(pm_err));
 
   gpio.begin();
   display.begin();
@@ -261,18 +279,6 @@ void setup() {
   }
 
   bleSetup();
-
-  // Enable automatic light sleep between loop iterations.
-  // CONFIG_PM_ENABLE and CONFIG_FREERTOS_USE_TICKLESS_IDLE are compiled into
-  // ESP-IDF via sdkconfig.defaults (framework = arduino, espidf). BLE modem
-  // sleep keeps the radio alive across sleep/wake cycles.
-  esp_pm_config_esp32c3_t pm_config = {
-    .max_freq_mhz = 80,
-    .min_freq_mhz = 10,
-    .light_sleep_enable = true
-  };
-  esp_err_t pm_err = esp_pm_configure(&pm_config);
-  DBG_PRINTF("PM configure: %s\n", esp_err_to_name(pm_err));
 
   // Initialize auto-reconnect to enabled by default
   autoReconnectEnabled = true;
@@ -627,6 +633,15 @@ void renderSleepScreen() {
 void loop() {
   // --- GPIO first: always poll buttons before anything else ---
   gpio.update();
+
+  // A bounded diagnostic heartbeat distinguishes a stalled main loop from a
+  // missed key/display update. It never resets the device or touches a note.
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat >= 5000) {
+    lastHeartbeat = millis();
+    DBG_PRINTF("[ALIVE] ms=%lu ui=%d ble=%d\n", lastHeartbeat,
+               static_cast<int>(currentState), static_cast<int>(getConnectionState()));
+  }
 
   // Control auto-reconnect based on UI state
   static UIState lastState = UIState::MAIN_MENU;

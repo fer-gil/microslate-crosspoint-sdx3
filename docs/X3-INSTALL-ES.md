@@ -146,3 +146,9 @@ Ctrl+N crea una nota desde el menú, la lista (también vacía) o el editor. Si 
 Ante un error de guardado al salir aparecen `Retry saving`, `Keep editing` y `Discard changes and leave`. La opción inicial conserva la edición. Esc vuelve al texto; las flechas y botones físicos permiten elegir. Descartar requiere seleccionar esa opción y confirmar: pierde los cambios posteriores al último guardado. Los datos que solo están en memoria se pierden al reiniciar.
 
 Prueba de regresión en una nota desechable: desde una lista vacía pulsa Ctrl+N, cancela el título con Esc, escribe, guarda con Ctrl+S, sal con Esc y vuelve a abrir. No borres notas importantes para probarlo.
+
+### Arranque desde CrossPoint: comprobación pendiente
+
+Esta versión mantiene 80 MHz y desactiva la suspensión ligera automática mientras se usa MicroSlate para investigar el bloqueo intermitente de botones y BLE al entrar desde CrossPoint. Puede consumir más batería durante la escritura; el reposo profundo tras cinco minutos se conserva. Los registros USB tienen una espera limitada. La causa del bloqueo aún no está demostrada.
+
+Después de guardar la nota, prueba tres recorridos CrossPoint → MicroSlate → CrossPoint sin reconectar el USB. Comprueba los botones inmediatamente y la conexión del K70. Después repite sin cable: una vez con el teclado apagado para probar solo botones, y otra con él encendido. Una recuperación tras conectar USB no cuenta como arranque correcto.
