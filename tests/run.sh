@@ -22,3 +22,7 @@ ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror -DRELEASE_BUILD -DINPUT_MANAGER_TES
   -Itests/fakes -Ilib/InputManager/include tests/test_buttons.cpp lib/InputManager/src/InputManager.cpp \
   -o "$out/test_buttons"
 "$out/test_buttons"
+${CXX:-c++} -std=c++17 -Wall -Wextra -Werror -g \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -Isrc tests/test_ble_connection.cpp -o "$out/test_ble_connection"
+"$out/test_ble_connection"

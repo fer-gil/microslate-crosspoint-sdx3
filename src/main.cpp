@@ -139,6 +139,11 @@ void switchToOtaApp(int index) {
     saveCurrentFile();
     if (editorHasUnsavedChanges()) { screenDirty = true; return; }
   }
+  if (!blePrepareForAppSwitch()) {
+    DBG_PRINTLN("[OTA] Waiting for BLE to stop; select CrossPoint again in a moment");
+    screenDirty = true;
+    return;
+  }
   esp_err_t result = esp_ota_set_boot_partition(target);
   if (result != ESP_OK) {
     DBG_PRINTF("[OTA] Boot selection failed: %s\n", esp_err_to_name(result));
