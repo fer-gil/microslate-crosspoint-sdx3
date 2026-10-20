@@ -1,4 +1,18 @@
-# MicroSlate
+# MicroSlate — X3 Markdown preview
+
+This fork builds for **Xteink X3 / UC8253, 792×528**. For this branch, use
+[the X3 installation and backup guide](docs/X3-INSTALL-ES.md). The X4 browser
+installer described below is upstream documentation, not the installation path
+for this X3 preview. Build with `pio run -e xteink_x3`; run `sh tests/run.sh`,
+`python3 tests/test_sync.py`, and `python3 tests/test_pandoc.py` (requires Pandoc).
+
+New notes use `.md`; legacy `.txt` files retain their extension. In Markdown
+notes, the active paragraph exposes source and inactive paragraphs hide supported
+markers. Ctrl+M toggles visual/source view. ATX headings, bold, italic, lists and
+named Pandoc footnotes are supported; definitions render in source order.
+The new firmware has not yet been validated on the physical X3.
+
+The remaining documentation describes the upstream baseline.
 
 A dedicated writing firmware for the **Xteink X4** e-paper device. Pairs with any **Bluetooth LE (BLE)** keyboard and saves notes to MicroSD.
 
@@ -232,9 +246,13 @@ python3 sync/microslate_sync.py
 
 ## File Format
 
-Notes are plain `.txt` files stored in `/notes/` on the SD card. Filenames are derived from the note title — spaces become underscores, everything is lowercased, and `.txt` is appended. For example, a note titled "My Note" becomes `my_note.txt`.
-
-Files are fully compatible with any text editor on a computer. To add notes manually, drop `.txt` files into the `/notes/` folder on the SD card — the title shown on the device is derived from the filename.
+New notes are UTF-8 `.md` files in `/notes/`. Existing `.txt` notes open in plain
+text mode and retain `.txt` when edited or renamed. Both types are listed and
+included in Wi-Fi backup. Formatting only changes the display; source markers
+are saved unchanged. Notes larger than 16 383 bytes are refused to prevent
+truncation. Footnotes use `[^id]` references and `[^id]: body` definitions with
+indented continuation paragraphs. Keep definitions at the end for an endnotes
+section; the renderer does not relocate them.
 
 ## Project Structure
 

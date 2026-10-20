@@ -7,6 +7,7 @@
 #include "sd_backup.h"
 
 #include "config.h"
+#include "autosave.h"
 #include "ble_keyboard.h"
 #include "input_handler.h"
 #include "text_editor.h"
@@ -103,7 +104,7 @@ static void updateScreen() {
 
 void setup() {
   DBG_INIT();
-  DBG_PRINTLN("MicroSlate starting...");
+  DBG_PRINTLN("MicroSlate Markdown preview - X3 UC8253 - " __DATE__ " " __TIME__);
 
   setCpuFrequencyMhz(80);
 
@@ -181,7 +182,7 @@ void setup() {
   // Initialize auto-reconnect to enabled by default
   autoReconnectEnabled = true;
 
-  DBG_PRINTLN("MicroSlate ready.");
+  DBG_PRINTF("MicroSlate ready; free heap: %u bytes\n", ESP.getFreeHeap());
 
   // The display needs one FULL_REFRESH after power-on to initialize its analog
   // circuits before FAST_REFRESH will work.
@@ -195,13 +196,12 @@ void setup() {
 void enterDeepSleep(SleepReason reason) {
   DBG_PRINTLN("Entering deep sleep...");
   
-  // Render the sleep screen before entering deep sleep
-  renderSleepScreen();
-
   // Save any unsaved work
   if (currentState == UIState::TEXT_EDITOR && editorHasUnsavedChanges()) {
     saveCurrentFile();
+    if (editorHasUnsavedChanges()) { screenDirty = true; return; }
   }
+  renderSleepScreen();
 
   display.deepSleep();     // Power down display first
   gpio.startDeepSleep();   // Waits for power button release, then sleeps
@@ -259,6 +259,7 @@ static void processPhysicalButtons() {
       if (currentState != UIState::MAIN_MENU) {
         if (currentState == UIState::TEXT_EDITOR && editorHasUnsavedChanges()) {
           saveCurrentFile();
+          if (editorHasUnsavedChanges()) { screenDirty = true; return; }
         }
         currentState = UIState::MAIN_MENU;
         screenDirty = true;
@@ -283,6 +284,7 @@ static void processPhysicalButtons() {
       DBG_PRINTLN("BACK held for 5s — restarting device...");
       if (currentState == UIState::TEXT_EDITOR && editorHasUnsavedChanges()) {
         saveCurrentFile();
+        if (editorHasUnsavedChanges()) { screenDirty = true; return; }
       }
       delay(100);
       ESP.restart();
@@ -574,10 +576,7 @@ void loop() {
       && editorHasUnsavedChanges()
       && editorGetCurrentFile()[0] != '\0') {
     unsigned long now = millis();
-    bool idleTrigger = (now - lastInputTime) > AUTO_SAVE_IDLE_MS
-                    && (now - lastAutoSaveMs) > AUTO_SAVE_IDLE_MS;
-    bool capTrigger  = (now - lastAutoSaveMs) > AUTO_SAVE_MAX_MS;
-    if (idleTrigger || capTrigger) {
+    if (autosaveDue(now, lastInputTime, lastAutoSaveMs)) {
       lastAutoSaveMs = now;
       saveCurrentFile(false);  // Skip refreshFileList — file list unchanged by content update
     }

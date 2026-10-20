@@ -89,6 +89,7 @@ static constexpr uint8_t HID_KEY_A          = 0x04;
 static constexpr uint8_t HID_KEY_B          = 0x05;
 static constexpr uint8_t HID_KEY_D          = 0x07;
 static constexpr uint8_t HID_KEY_F          = 0x09;
+static constexpr uint8_t HID_KEY_M          = 0x10;
 static constexpr uint8_t HID_KEY_N          = 0x11;
 static constexpr uint8_t HID_KEY_P          = 0x13;
 static constexpr uint8_t HID_KEY_Q          = 0x14;

@@ -1,3 +1,4 @@
+#include "hid_report.h"
 #include "ble_keyboard.h"
 #include "input_handler.h"
 #include "sd_backup.h"
@@ -22,7 +23,7 @@ static bool connectToKeyboard = false;
 static std::string keyboardAddress = "";
 static uint8_t keyboardAddressType = 0;
 static uint8_t lastReport[8] = {0};
-static uint8_t inputReportId = 0;   // Non-zero if keyboard prefixes reports with a report ID
+static uint8_t inputReportId = 0;   // Report Reference ID learned from the input characteristic
 
 // NVS storage for persistent pairing
 static Preferences prefs;
@@ -87,33 +88,12 @@ static void pruneStaleDevices() {
 // Keyboard notification callback
 static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
                               uint8_t* pData, size_t length, bool isNotify) {
-  // Strip report ID prefix if the keyboard uses one (learned during HID discovery).
-  // e.g. 9-byte: [ReportID][Mod][Reserved][K1-K6]  →  strip to 8-byte standard
-  //      8-byte: [ReportID][Mod][K1-K6]             →  strip to 7-byte compact
-  if (inputReportId != 0 && length > 0 && pData[0] == inputReportId) {
-    pData++;
-    length--;
-  }
-
-  // Must be 7 or 8 bytes after stripping. Consumer-control / media-key reports
-  // from other report IDs arrive here too — silently ignore them.
-  if (length < 7 || length > 8) {
+  uint8_t newReport[8] = {0};
+  if (!normalizeKeyboardReport(pData, length, inputReportId, newReport)) {
     DBG_PRINTF("[KB-Notify] Ignoring %d-byte report (not keyboard format)\n", (int)length);
     return;
   }
-
-  uint8_t modifiers = pData[0];
-  uint8_t newReport[8] = {0};
-
-  // Normalize to 8-byte format: [Mod] [Reserved=0] [Key1-Key6]
-  if (length == 8) {
-    memcpy(newReport, pData, 8);
-  } else {
-    // 7-byte compact: insert reserved byte
-    newReport[0] = pData[0];  // Modifiers
-    newReport[1] = 0;          // Reserved
-    memcpy(&newReport[2], &pData[1], 6);
-  }
+  uint8_t modifiers = newReport[0];
 
 #ifndef RELEASE_BUILD
   Serial.print("KB: ");

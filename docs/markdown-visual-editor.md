@@ -27,11 +27,11 @@ Goal: Typora-style editing on the Xteink, preserving raw Markdown on disk.
 - On a constrained e-ink display, superscript may initially use a compact baseline marker if fonts do not support raised glyph positioning.
 
 ## Milestones
-- [ ] Build a standalone, testable inline/block Markdown tokenizer, including footnotes.
-- [ ] Implement source-offset mapping and visual rendering for inactive paragraphs.
-- [ ] Integrate with editor and renderer; toggle visual/plain modes.
-- [ ] Update file management and Wi-Fi sync for `.md` while preserving `.txt`.
-- [ ] Test cursor movement, editing delimiters, Unicode, wrap, autosave and backup.
+- [x] Build a standalone, testable inline/block Markdown tokenizer, including footnotes.
+- [x] Implement source-offset mapping and visual rendering for inactive paragraphs.
+- [x] Integrate with editor and renderer; toggle visual/plain modes.
+- [x] Update file management and Wi-Fi sync for `.md` while preserving `.txt`.
+- [x] Test cursor movement, editing delimiters, Unicode, wrap, autosave and backup.
 - [ ] Build with PlatformIO and validate on the exact X3 hardware variant.
 - [ ] Only then prepare a flashable firmware release.
 
@@ -43,4 +43,16 @@ Goal: Typora-style editing on the Xteink, preserving raw Markdown on disk.
 - `Texto[^1]` renders a compact footnote marker, with `[^1]: Nota al pie.` shown in the note section; the saved Markdown remains unchanged.
 - Legacy `.txt` notes remain readable and are not silently rewritten.
 
-**Status:** planning scaffold only; no firmware changes or device tests yet.
+**Status:** implemented preview with host tests and X3 build. Physical validation
+of this new build remains pending. See `X3-INSTALL-ES.md`. Footnote identifiers
+render as compact baseline `[id]`; definitions retain source order. Ordered list
+numbers remain visible. Unsupported syntax remains source. Inline emphasis can span soft source line breaks within a paragraph.
+The active paragraph is a source range, never a separate editable visual buffer.
+There is no selection feature in the baseline editor. Parsed flags consume
+16 KiB; rendering and layout share font/style advance measurements.
+
+Tests include sanitizers and deterministic malformed-input cases, UTF-8 deletion
+and navigation, save readback/short writes/open failures/rename failures,
+backup recovery, extension preservation/collisions, autosave timing and timer
+wraparound, Ctrl report-ID ambiguity, byte-exact Wi-Fi transfer, and Pandoc AST
+validation of repeated and multiline notes. These do not replace hardware tests.

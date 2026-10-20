@@ -132,6 +132,9 @@ char hidToAscii(uint8_t hid, uint8_t modifiers) {
 static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
   // Ctrl shortcuts
   if (isCtrl(modifiers)) {
+    if (keyCode == HID_KEY_M) { // Ctrl+M: visual/source Markdown
+      editorToggleVisual(); screenDirty = true; return;
+    }
     if (keyCode == HID_KEY_S) {
       saveCurrentFile();
       screenDirty = true;
@@ -187,6 +190,7 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
   // ESC = save and return to file browser
   if (keyCode == HID_KEY_ESCAPE) {
     if (editorHasUnsavedChanges()) saveCurrentFile();
+    if (editorHasUnsavedChanges()) { screenDirty = true; return; }
     currentState = UIState::FILE_BROWSER;
     screenDirty = true;
     return;
@@ -246,6 +250,7 @@ static void handleRenameKey(uint8_t keyCode, uint8_t modifiers) {
           // New file — derive filename from title
           char filename[MAX_FILENAME_LEN];
           deriveUniqueFilename(renameBuffer, filename, MAX_FILENAME_LEN);
+          if (!filename[0]) return; // No free name: never overwrite another note.
           editorSetCurrentFile(filename);
         } else {
           // Existing file — rename on disk to match new title

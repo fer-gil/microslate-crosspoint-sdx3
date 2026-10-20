@@ -44,3 +44,9 @@ const char* editorGetCurrentTitle();
 bool editorHasUnsavedChanges();
 void editorSetUnsavedChanges(bool v);
 int editorGetWordCount();
+
+using EditorMeasure = int (*)(const char*, uint8_t);
+void editorSetLayout(int width, EditorMeasure measure, int epoch);
+void editorToggleVisual();
+bool editorIsVisual();
+size_t editorGetGlyph(size_t offset, char out[5], uint8_t& style);

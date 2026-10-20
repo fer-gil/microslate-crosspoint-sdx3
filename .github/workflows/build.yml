@@ -1,6 +1,4 @@
 name: Build X3 firmware
-
-# Runs on every push, and can be started by hand from the Actions tab.
 on:
   push:
   workflow_dispatch:
@@ -8,51 +6,37 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install PlatformIO
-        run: pip install platformio esptool
-
-      - name: Build MicroSlate for X3
-        run: pio run -e xteink_x3
-
-      - name: Assemble flashable images
+      - name: Test parser, editor, HID, autosave and storage failure recovery
+        run: sh tests/run.sh
+      - name: Test Wi-Fi sync byte preservation
+        run: python tests/test_sync.py
+      - name: Validate Pandoc interchange syntax
         run: |
-          BOOT_APP0=$(find ~/.platformio -name "boot_app0.bin" | head -1)
-          BUILD=.pio/build/xteink_x3
-
-          # 1) MicroSlate on its own, as a raw app image for the SD-card
-          #    bootloader route (this is the file to rename to update.bin).
-          cp "$BUILD/firmware.bin" microslate-x3-update.bin
-
-          # 2) Dual-boot: CrossPoint in slot 0, MicroSlate in slot 1.
-          #    Only built if a CrossPoint app image has been supplied in the
-          #    repo root as crosspoint-app.bin (see README-X3.md).
-          if [ -f crosspoint-app.bin ]; then
-            esptool.py --chip esp32c3 merge_bin \
-              --flash_mode dio --flash_size 16MB \
-              -o dualboot-x3.bin \
-              0x0      "$BUILD/bootloader.bin" \
-              0x8000   "$BUILD/partitions.bin" \
-              0xe000   "$BOOT_APP0" \
-              0x10000  crosspoint-app.bin \
-              0x650000 "$BUILD/firmware.bin"
-          else
-            echo "No crosspoint-app.bin in repo root - skipping dual-boot image."
-          fi
-
-      - name: Upload build output
-        if: always()
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+          python tests/test_pandoc.py
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.19
+      - name: Build MicroSlate for X3 UC8253
+        run: pio run -e xteink_x3 | tee build-x3.log
+      - name: Package application only
+        run: |
+          mkdir package
+          cp .pio/build/xteink_x3/firmware.bin package/microslate-x3-uc8253-app.bin
+          cp docs/X3-INSTALL-ES.md package/LEEME.md
+          cp tests/acceptance.md package/prueba-markdown.md
+          cp build-x3.log package/
+          git rev-parse HEAD > package/SOURCE-COMMIT.txt
+          cd package
+          sha256sum microslate-x3-uc8253-app.bin > SHA256SUMS.txt
+      - name: Upload verified build output
         uses: actions/upload-artifact@v4
         with:
-          name: x3-firmware
-          path: |
-            microslate-x3-update.bin
-            dualboot-x3.bin
-          if-no-files-found: warn
+          name: microslate-x3-uc8253-markdown-preview
+          path: package/
+          if-no-files-found: error
