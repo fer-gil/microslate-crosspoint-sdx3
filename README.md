@@ -1,4 +1,21 @@
-# MicroSlate
+# MicroSlate — X3 Markdown preview
+
+This fork builds for **Xteink X3 / UC8253, 792×528**. For this branch, use
+[the X3 installation and backup guide](docs/X3-INSTALL-ES.md). The X4 browser
+installer described below is upstream documentation, not the installation path
+for this X3 preview. Build with `pio run -e xteink_x3`; run `sh tests/run.sh`,
+`python3 tests/test_sync.py`, and `python3 tests/test_pandoc.py` (requires Pandoc).
+
+New notes use `.md`; legacy `.txt` files retain their extension. In Markdown
+notes, the active paragraph exposes source and inactive paragraphs hide supported
+markers. Ctrl+M toggles visual/source view. ATX headings, bold, italic, lists and
+named Pandoc footnotes are supported; definitions render in source order.
+The installed `292a14f` keyboard/dual-boot branch is integrated: Corsair K70
+14-byte BLE reports, US-International accents and the CrossPoint return menu.
+Body text starts one step smaller (14); Ctrl+F still changes it.
+The new firmware has not yet been validated on the physical X3.
+
+The remaining documentation describes the upstream baseline.
 
 A dedicated writing firmware for the **Xteink X4** e-paper device. Pairs with any **Bluetooth LE (BLE)** keyboard and saves notes to MicroSD.
 
@@ -17,7 +34,7 @@ A dedicated writing firmware for the **Xteink X4** e-paper device. Pairs with an
 - **Clean Mode** — hides all UI chrome while editing so only your text is on screen (Ctrl+Z to toggle)
 - **Dark Mode** — inverted display
 - **Display Orientation** — portrait, landscape, and inverted variants
-- **Power Management** — ESP-IDF light sleep between loop iterations (CPU drops to 10MHz), BLE modem sleep keeps the radio alive, SD card sleeps between accesses, display analog circuits power down after each refresh, and the device enters deep sleep after 5 minutes of inactivity
+- **Power Management** — Interactive sessions currently stay at 80 MHz with automatic light sleep disabled while an intermittent CrossPoint-to-MicroSlate startup freeze is investigated. This can increase active battery use; no battery-life measurement is claimed. BLE radio modem sleep, SD/display power management and deep sleep after five minutes remain enabled. USB diagnostic writes have a bounded 1 ms timeout; a zero timeout is avoided on the installed Arduino core.
 - **WiFi Sync** — one-button backup of all notes to your PC over WiFi. Saves network credentials for instant reconnect. Read-only server — nothing on the device can be modified over the network
 - **Standalone Build** — all libraries are bundled in the repo; no sibling projects required
 - **Dual-Boot** — optional combined firmware that includes CrossPoint (an e-reader) in a second OTA slot. A "CrossPoint" entry appears in the main menu; selecting it reboots into the reader. CrossPoint gains a reciprocal "MicroSlate" entry. Both apps work normally when flashed standalone.
@@ -90,11 +107,12 @@ Options: **Browse Notes**, **New Note**, **Settings**, **Sync** — and **CrossP
 | Up / Down | Navigate list |
 | Left / Right | Also navigate (convenient in landscape) |
 | Enter | Open note |
-| Ctrl+N | Edit title of selected note |
+| Ctrl+N | Create a new note, including when the list is empty |
+| Ctrl+R / F2 | Edit title of selected note |
 | Ctrl+D | Delete selected note (confirmation required) |
 | Esc | Back to main menu |
 
-When delete is pending, the footer shows `Delete? Enter:Yes  Esc:No`. Press Enter to confirm or any other key to cancel.
+When delete is pending, the footer shows `Delete? Enter:Yes  Esc:No`. Press Enter to confirm or Esc to cancel.
 
 ### Text Editor
 
@@ -105,7 +123,8 @@ When delete is pending, the footer shows `Delete? Enter:Yes  Esc:No`. Press Ente
 | Backspace / Delete | Remove characters |
 | Tab | Cycle writing mode (Scroll → Typewriter → Pagination) |
 | Ctrl+S | Save manually |
-| Ctrl+N | Edit note title |
+| Ctrl+N | Save this note and create a new one |
+| Ctrl+R / F2 | Edit note title |
 | Ctrl+Z | Toggle clean mode (hides UI chrome) |
 | Ctrl+T | Toggle Typewriter mode |
 | Ctrl+P | Toggle Pagination mode |
@@ -126,7 +145,7 @@ Auto-save runs silently after 10 seconds of idle or every 2 minutes during conti
 
 ### Title Edit
 
-Accessed via Ctrl+N from the file browser or editor.
+Accessed via Ctrl+R or F2 from the file browser or editor. Ctrl+N creates a new note. Cancelling its title keeps an Untitled draft that can still save as a unique .md file.
 
 | Key | Action |
 |-----|--------|
@@ -232,9 +251,13 @@ python3 sync/microslate_sync.py
 
 ## File Format
 
-Notes are plain `.txt` files stored in `/notes/` on the SD card. Filenames are derived from the note title — spaces become underscores, everything is lowercased, and `.txt` is appended. For example, a note titled "My Note" becomes `my_note.txt`.
-
-Files are fully compatible with any text editor on a computer. To add notes manually, drop `.txt` files into the `/notes/` folder on the SD card — the title shown on the device is derived from the filename.
+New notes are UTF-8 `.md` files in `/notes/`. Existing `.txt` notes open in plain
+text mode and retain `.txt` when edited or renamed. Both types are listed and
+included in Wi-Fi backup. Formatting only changes the display; source markers
+are saved unchanged. Notes larger than 16 383 bytes are refused to prevent
+truncation. Footnotes use `[^id]` references and `[^id]: body` definitions with
+indented continuation paragraphs. Keep definitions at the end for an endnotes
+section; the renderer does not relocate them.
 
 ## Project Structure
 
@@ -295,3 +318,19 @@ MicroSlate is the hardware companion to **TypeSlate** — a free, full-screen di
 - **Website** — [typeslate.com](https://typeslate.com)
 
 If MicroSlate is useful to you and you'd like to say thanks, you can support the project at [ko-fi.com/typeslate](https://ko-fi.com/typeslate).
+
+### Save failure recovery
+
+If saving fails on exit or Ctrl+N, the text remains in memory. The recovery screen offers Retry saving, Keep editing (default), and Discard changes and leave. Esc returns to editing. Navigate with arrows or physical buttons and confirm with Enter/Confirm. Discard is explicit and leaves the last saved disk version unchanged. USB reset or power loss can still lose unsaved memory.
+
+### Intermittent startup freeze investigation
+
+The owner confirmed the create/save/exit correction in 910c0c9, but physical buttons and initial BLE connection can still freeze when entering from CrossPoint; a USB reset recovers them. The previous brief successful input test did not establish startup reliability. The new awake-session policy is a diagnostic mitigation, not a proven root cause. Validate three CrossPoint → MicroSlate round trips without reconnecting USB, then repeat on battery with the keyboard off/on. Keep notes saved before resetting. `[ALIVE]` logs every five seconds indicate main-loop progress.
+
+### BLE reconnect crash correction
+
+The 266ad6c diagnostic capture showed repeatable Load access fault panics: one in HID fallback after the disconnect callback nulled a shared service pointer, and others in NimBLE 2.3.4 GAP task completion after MTU/connection failure. The connection now uses asynchronous GAP and security setup with the default ATT MTU (23, enough for K70 14-byte reports); discovery pointers are local to one attempt and every blocking GATT step checks the connection epoch. GAP callbacks defer logging instead of yielding. Switching apps first cancels pending connection setup, disconnects the keyboard and waits for the worker/link to stop, without deleting bonds. Regression tests interrupt every discovery/subscription step and cover timeout, failed connect, missing service/input and partial subscription failure. Physical validation of the corrected version is still required.
+
+### Pinned NimBLE disconnect-context patch
+
+Physical testing of 1650ad0 still captured a third-entry panic in taskRelease. esp-nimble-cpp 2.3.4 resolves a disconnect client by peer address/handle because the callback arg can be wrong, but originally copied m_pTaskData from that untrusted arg before resolving it. The build now applies scripts/patch_nimble.py: defer that snapshot until the actual disconnect client is resolved. The SHA-256 guard rejects a changed dependency and verifies incremental/idempotent application. tests/test_nimble_disconnect.py extracts the real handler prefix and disconnect branch, reproduces the old access fault under ASan/UBSan with an invalid arg, then verifies invalid/wrong/missing client and async failure cases after patching. The firmware CI also requires that the dependency was actually patched. Root-cause verification on X3 is still pending.

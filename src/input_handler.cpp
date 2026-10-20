@@ -34,11 +34,215 @@ static volatile bool queueFull = false;
 // --- CapsLock state ---
 static bool capsLockOn = false;
 
+// State used by the US-International helpers below.
+extern bool screenDirty;
+extern char renameBuffer[];
+extern int renameBufferLen;
+
+// US-International dead-key state.
+static char pendingDeadKey = 0;
+
+static bool isDeadKey(char c) {
+  return c == '\'' || c == '"' || c == '`' || c == '~' || c == '^';
+}
+
+static const char* composeDeadKey(char dead, char base) {
+  switch (dead) {
+    case '\'':
+      switch (base) {
+        case 'a': return "\xC3\xA1"; // á
+        case 'A': return "\xC3\x81"; // Á
+        case 'e': return "\xC3\xA9"; // é
+        case 'E': return "\xC3\x89"; // É
+        case 'i': return "\xC3\xAD"; // í
+        case 'I': return "\xC3\x8D"; // Í
+        case 'o': return "\xC3\xB3"; // ó
+        case 'O': return "\xC3\x93"; // Ó
+        case 'u': return "\xC3\xBA"; // ú
+        case 'U': return "\xC3\x9A"; // Ú
+        case 'y': return "\xC3\xBD"; // ý
+        case 'Y': return "\xC3\x9D"; // Ý
+      }
+      break;
+
+    case '"':
+      switch (base) {
+        case 'a': return "\xC3\xA4"; // ä
+        case 'A': return "\xC3\x84"; // Ä
+        case 'e': return "\xC3\xAB"; // ë
+        case 'E': return "\xC3\x8B"; // Ë
+        case 'i': return "\xC3\xAF"; // ï
+        case 'I': return "\xC3\x8F"; // Ï
+        case 'o': return "\xC3\xB6"; // ö
+        case 'O': return "\xC3\x96"; // Ö
+        case 'u': return "\xC3\xBC"; // ü
+        case 'U': return "\xC3\x9C"; // Ü
+        case 'y': return "\xC3\xBF"; // ÿ
+      }
+      break;
+
+    case '`':
+      switch (base) {
+        case 'a': return "\xC3\xA0"; // à
+        case 'A': return "\xC3\x80"; // À
+        case 'e': return "\xC3\xA8"; // è
+        case 'E': return "\xC3\x88"; // È
+        case 'i': return "\xC3\xAC"; // ì
+        case 'I': return "\xC3\x8C"; // Ì
+        case 'o': return "\xC3\xB2"; // ò
+        case 'O': return "\xC3\x92"; // Ò
+        case 'u': return "\xC3\xB9"; // ù
+        case 'U': return "\xC3\x99"; // Ù
+      }
+      break;
+
+    case '^':
+      switch (base) {
+        case 'a': return "\xC3\xA2"; // â
+        case 'A': return "\xC3\x82"; // Â
+        case 'e': return "\xC3\xAA"; // ê
+        case 'E': return "\xC3\x8A"; // Ê
+        case 'i': return "\xC3\xAE"; // î
+        case 'I': return "\xC3\x8E"; // Î
+        case 'o': return "\xC3\xB4"; // ô
+        case 'O': return "\xC3\x94"; // Ô
+        case 'u': return "\xC3\xBB"; // û
+        case 'U': return "\xC3\x9B"; // Û
+      }
+      break;
+
+    case '~':
+      switch (base) {
+        case 'a': return "\xC3\xA3"; // ã
+        case 'A': return "\xC3\x83"; // Ã
+        case 'n': return "\xC3\xB1"; // ñ
+        case 'N': return "\xC3\x91"; // Ñ
+        case 'o': return "\xC3\xB5"; // õ
+        case 'O': return "\xC3\x95"; // Õ
+      }
+      break;
+  }
+
+  return nullptr;
+}
+
+static void insertEditorText(const char* text) {
+  editorInsertText(text);
+  screenDirty = true;
+}
+
+static void handleEditorPrintable(char c) {
+  // Pandoc [^id] must be writable without the international dead-key composer
+  // turning identifiers beginning with vowels into circumflex characters.
+  if (!pendingDeadKey && c == '^' && editorGetCursorPosition() > 0 &&
+      editorGetBuffer()[editorGetCursorPosition()-1] == '[') {
+    editorInsertChar(c); screenDirty = true; return;
+  }
+  if (pendingDeadKey) {
+    char dead = pendingDeadKey;
+
+    // Dead key + Space or the same dead key prints the accent itself.
+    if (c == ' ' || c == dead) {
+      char literal[2] = {dead, '\0'};
+      pendingDeadKey = 0;
+      insertEditorText(literal);
+      return;
+    }
+
+    // A different dead key commits the old one and starts a new sequence.
+    if (isDeadKey(c)) {
+      char literal[2] = {dead, '\0'};
+      insertEditorText(literal);
+      pendingDeadKey = c;
+      return;
+    }
+
+    pendingDeadKey = 0;
+
+    if (const char* composed = composeDeadKey(dead, c)) {
+      insertEditorText(composed);
+      return;
+    }
+
+    // Unsupported combination: print both characters normally.
+    char literal[2] = {dead, '\0'};
+    char base[2] = {c, '\0'};
+    editorInsertText(literal);
+    editorInsertText(base);
+    screenDirty = true;
+    return;
+  }
+
+  if (isDeadKey(c)) {
+    pendingDeadKey = c;
+    return;
+  }
+
+  editorInsertChar(c);
+  screenDirty = true;
+}
+
+static void appendRenameText(const char* text) {
+  size_t n = strlen(text);
+  if (n == 0 || renameBufferLen + (int)n >= MAX_TITLE_LEN) return;
+
+  memcpy(renameBuffer + renameBufferLen, text, n);
+  renameBufferLen += (int)n;
+  renameBuffer[renameBufferLen] = '\0';
+  screenDirty = true;
+}
+
+static void handleRenamePrintable(char c) {
+  if (pendingDeadKey) {
+    char dead = pendingDeadKey;
+
+    if (c == ' ' || c == dead) {
+      char literal[2] = {dead, '\0'};
+      pendingDeadKey = 0;
+      appendRenameText(literal);
+      return;
+    }
+
+    if (isDeadKey(c)) {
+      char literal[2] = {dead, '\0'};
+      appendRenameText(literal);
+      pendingDeadKey = c;
+      return;
+    }
+
+    pendingDeadKey = 0;
+
+    if (const char* composed = composeDeadKey(dead, c)) {
+      appendRenameText(composed);
+      return;
+    }
+
+    char literal[2] = {dead, '\0'};
+    char base[2] = {c, '\0'};
+    appendRenameText(literal);
+    appendRenameText(base);
+    return;
+  }
+
+  if (isDeadKey(c)) {
+    pendingDeadKey = c;
+    return;
+  }
+
+  char text[2] = {c, '\0'};
+  appendRenameText(text);
+}
+
 // Where to return after title edit is confirmed or cancelled
 static UIState renameReturnState = UIState::FILE_BROWSER;
 
 // Forward declaration
 static void openTitleEdit(const char* currentTitle, UIState returnTo);
+
+// OTA app detection (defined in main.cpp)
+extern OtaAppEntry otaApps[];
+extern int otaAppCount;
+void switchToOtaApp(int index);
 
 // --- Shared UI state (defined in main.cpp) ---
 extern UIState currentState;
@@ -52,6 +256,66 @@ extern int charsPerLine;
 extern bool screenDirty;
 extern char renameBuffer[];
 extern int renameBufferLen;
+
+static UIState afterSave = UIState::FILE_BROWSER;
+static int saveErrorSelection = 1; // Keep editing is the safe default.
+int getSaveErrorSelection() { return saveErrorSelection; }
+
+static void completeEditorAction(UIState destination) {
+  pendingDeadKey = 0;
+  deleteConfirmPending = false;
+  if (destination == UIState::NEW_FILE) {
+    createNewFile();
+    openTitleEdit("Untitled", UIState::TEXT_EDITOR);
+  } else {
+    currentState = destination;
+    screenDirty = true;
+  }
+}
+
+void requestEditorExit(UIState destination) {
+  if (editorHasUnsavedChanges()) saveCurrentFile();
+  if (editorHasUnsavedChanges()) {
+    afterSave = destination;
+    saveErrorSelection = 1;
+    currentState = UIState::SAVE_ERROR;
+    screenDirty = true;
+    return;
+  }
+  completeEditorAction(destination);
+}
+
+static bool handleNoteShortcut(uint8_t keyCode, uint8_t modifiers) {
+  if (isCtrl(modifiers) && keyCode == HID_KEY_N &&
+      (currentState == UIState::MAIN_MENU || currentState == UIState::FILE_BROWSER ||
+       currentState == UIState::TEXT_EDITOR)) {
+    requestEditorExit(UIState::NEW_FILE);
+    return true;
+  }
+  return false;
+}
+
+static void handleSaveErrorKey(uint8_t keyCode) {
+  if (keyCode == HID_KEY_ESCAPE) {
+    // Escape always leaves this dialog without throwing away the buffer.
+    currentState = UIState::TEXT_EDITOR;
+  } else if (keyCode == HID_KEY_UP || keyCode == HID_KEY_LEFT) {
+    saveErrorSelection = (saveErrorSelection + 2) % 3;
+  } else if (keyCode == HID_KEY_DOWN || keyCode == HID_KEY_RIGHT) {
+    saveErrorSelection = (saveErrorSelection + 1) % 3;
+  } else if (keyCode == HID_KEY_ENTER) {
+    if (saveErrorSelection == 0) {
+      requestEditorExit(afterSave);
+    } else if (saveErrorSelection == 1) {
+      currentState = UIState::TEXT_EDITOR;
+    } else {
+      // Only an explicit selection discards unsaved work. Disk stays untouched.
+      editorSetUnsavedChanges(false);
+      completeEditorAction(afterSave == UIState::TEXT_EDITOR ? UIState::FILE_BROWSER : afterSave);
+    }
+  }
+  screenDirty = true;
+}
 
 void inputSetup() {
   queueHead = 0;
@@ -130,10 +394,19 @@ char hidToAscii(uint8_t hid, uint8_t modifiers) {
 
 // Handle text editor input
 static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
+  if (handleNoteShortcut(keyCode, modifiers)) return;
   // Ctrl shortcuts
   if (isCtrl(modifiers)) {
+    if (keyCode == HID_KEY_M) { // Ctrl+M: visual/source Markdown
+      editorToggleVisual(); screenDirty = true; return;
+    }
     if (keyCode == HID_KEY_S) {
       saveCurrentFile();
+      if (editorHasUnsavedChanges()) {
+        afterSave = UIState::TEXT_EDITOR;
+        saveErrorSelection = 1;
+        currentState = UIState::SAVE_ERROR;
+      }
       screenDirty = true;
       return;
     }
@@ -142,7 +415,7 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
       screenDirty = true;
       return;
     }
-    if (keyCode == HID_KEY_N) {
+    if (keyCode == HID_KEY_R) {
       openTitleEdit(editorGetCurrentTitle(), UIState::TEXT_EDITOR);
       return;
     }
@@ -186,9 +459,11 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
 
   // ESC = save and return to file browser
   if (keyCode == HID_KEY_ESCAPE) {
-    if (editorHasUnsavedChanges()) saveCurrentFile();
-    currentState = UIState::FILE_BROWSER;
-    screenDirty = true;
+    requestEditorExit(UIState::FILE_BROWSER);
+    return;
+  }
+  if (keyCode == HID_KEY_F2) {
+    openTitleEdit(editorGetCurrentTitle(), UIState::TEXT_EDITOR);
     return;
   }
 
@@ -208,7 +483,15 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
     case HID_KEY_DOWN:      editorMoveCursorDown();  screenDirty = true; return;
     case HID_KEY_HOME:      editorMoveCursorHome();  screenDirty = true; return;
     case HID_KEY_END:       editorMoveCursorEnd();   screenDirty = true; return;
-    case HID_KEY_BACKSPACE: editorDeleteChar();      screenDirty = true; return;
+    case HID_KEY_BACKSPACE:
+      if (pendingDeadKey) {
+        pendingDeadKey = 0;
+        screenDirty = true;
+      } else {
+        editorDeleteChar();
+        screenDirty = true;
+      }
+      return;
     case HID_KEY_DELETE:    editorDeleteForward();   screenDirty = true; return;
   }
 
@@ -218,16 +501,16 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
     return;
   }
 
-  // Printable character
+  // Printable character — US International dead-key composition.
   char c = hidToAscii(keyCode, modifiers);
   if (c != 0) {
-    editorInsertChar(c);
-    screenDirty = true;
+    handleEditorPrintable(c);
   }
 }
 
 // Open the title edit screen, returning to `returnTo` on confirm/cancel
 static void openTitleEdit(const char* currentTitle, UIState returnTo) {
+  pendingDeadKey = 0;
   strncpy(renameBuffer, currentTitle, MAX_TITLE_LEN - 1);
   renameBuffer[MAX_TITLE_LEN - 1] = '\0';
   renameBufferLen = strlen(renameBuffer);
@@ -246,6 +529,7 @@ static void handleRenameKey(uint8_t keyCode, uint8_t modifiers) {
           // New file — derive filename from title
           char filename[MAX_FILENAME_LEN];
           deriveUniqueFilename(renameBuffer, filename, MAX_FILENAME_LEN);
+          if (!filename[0]) return; // No free name: never overwrite another note.
           editorSetCurrentFile(filename);
         } else {
           // Existing file — rename on disk to match new title
@@ -271,29 +555,39 @@ static void handleRenameKey(uint8_t keyCode, uint8_t modifiers) {
   }
 
   if (keyCode == HID_KEY_BACKSPACE) {
+    if (pendingDeadKey) {
+      pendingDeadKey = 0;
+      screenDirty = true;
+      return;
+    }
+
     if (renameBufferLen > 0) {
       renameBufferLen--;
+      while (renameBufferLen > 0 &&
+             (((unsigned char)renameBuffer[renameBufferLen] & 0xC0) == 0x80)) {
+        renameBufferLen--;
+      }
       renameBuffer[renameBufferLen] = '\0';
       screenDirty = true;
     }
     return;
   }
 
-  // Allow all printable characters in a title (including spaces)
+  // Allow printable characters in a title, including US International
+  // dead-key composition.
   char c = hidToAscii(keyCode, modifiers);
-  if (c != 0 && c >= ' ' && renameBufferLen < MAX_TITLE_LEN - 1) {
-    renameBuffer[renameBufferLen++] = c;
-    renameBuffer[renameBufferLen] = '\0';
-    screenDirty = true;
+  if (c != 0 && c >= ' ') {
+    handleRenamePrintable(c);
   }
 }
 
 static void dispatchEvent(const KeyEvent& event) {
   if (!event.pressed) return;
+  if (handleNoteShortcut(event.keyCode, event.modifiers)) return;
 
   switch (currentState) {
     case UIState::MAIN_MENU: {
-      int menuCount = 4;
+      int menuCount = 4 + otaAppCount;
       if (event.keyCode == HID_KEY_DOWN) {
         mainMenuSelection = (mainMenuSelection + 1) % menuCount;
         screenDirty = true;
@@ -306,8 +600,7 @@ static void dispatchEvent(const KeyEvent& event) {
           currentState = UIState::FILE_BROWSER;
           screenDirty = true;
         } else if (mainMenuSelection == 1) {
-          createNewFile();
-          openTitleEdit("Untitled", UIState::TEXT_EDITOR);
+          requestEditorExit(UIState::NEW_FILE);
         } else if (mainMenuSelection == 2) {
           currentState = UIState::SETTINGS;
           screenDirty = true;
@@ -315,6 +608,8 @@ static void dispatchEvent(const KeyEvent& event) {
           wifiSyncStart();
           currentState = UIState::WIFI_SYNC;
           screenDirty = true;
+        } else if (mainMenuSelection >= 4) {
+          switchToOtaApp(mainMenuSelection - 4);
         }
       }
       break;
@@ -323,7 +618,8 @@ static void dispatchEvent(const KeyEvent& event) {
     case UIState::FILE_BROWSER: {
       int fc = getFileCount();
 
-      // Delete confirmation pending — Enter confirms, anything else cancels
+      // Delete confirmation pending — stay here until Enter or Esc.
+      // Ignore stray keyboard events so they cannot silently cancel deletion.
       if (deleteConfirmPending) {
         if (event.keyCode == HID_KEY_ENTER && fc > 0) {
           FileInfo* files = getFileList();
@@ -331,9 +627,12 @@ static void dispatchEvent(const KeyEvent& event) {
           int newFc = getFileCount();
           if (selectedFileIndex >= newFc) selectedFileIndex = newFc - 1;
           if (selectedFileIndex < 0) selectedFileIndex = 0;
+          deleteConfirmPending = false;
+          screenDirty = true;
+        } else if (event.keyCode == HID_KEY_ESCAPE) {
+          deleteConfirmPending = false;
+          screenDirty = true;
         }
-        deleteConfirmPending = false;
-        screenDirty = true;
         break;
       }
 
@@ -347,7 +646,7 @@ static void dispatchEvent(const KeyEvent& event) {
         FileInfo* files = getFileList();
         loadFile(files[selectedFileIndex].filename);
         screenDirty = true;
-      } else if (isCtrl(event.modifiers) && event.keyCode == HID_KEY_N) {
+      } else if ((isCtrl(event.modifiers) && event.keyCode == HID_KEY_R) || event.keyCode == HID_KEY_F2) {
         if (fc > 0) {
           FileInfo* files = getFileList();
           openTitleEdit(files[selectedFileIndex].title, UIState::FILE_BROWSER);
@@ -366,6 +665,10 @@ static void dispatchEvent(const KeyEvent& event) {
 
     case UIState::TEXT_EDITOR:
       handleEditorKey(event.keyCode, event.modifiers);
+      break;
+
+    case UIState::SAVE_ERROR:
+      handleSaveErrorKey(event.keyCode);
       break;
 
     case UIState::RENAME_FILE:

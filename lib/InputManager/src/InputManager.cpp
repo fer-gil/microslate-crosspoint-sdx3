@@ -1,5 +1,16 @@
 #include "InputManager.h"
 #include <driver/adc.h>
+#include <algorithm>
+#if defined(XTEINK_X3_HARDWARE) && !defined(INPUT_MANAGER_TEST)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+static portMUX_TYPE buttonMux = portMUX_INITIALIZER_UNLOCKED;
+#define BUTTON_LOCK() portENTER_CRITICAL(&buttonMux)
+#define BUTTON_UNLOCK() portEXIT_CRITICAL(&buttonMux)
+#else
+#define BUTTON_LOCK()
+#define BUTTON_UNLOCK()
+#endif
 
 // Recorded ADC values from real devices
 // BACK CONF LEFT RGHT   UP DOWN
@@ -21,10 +32,8 @@ const char* InputManager::BUTTON_NAMES[] = {"Back", "Confirm", "Left", "Right", 
 
 InputManager::InputManager()
     : currentState(0),
-      lastState(0),
       pressedEvents(0),
       releasedEvents(0),
-      lastDebounceTime(0),
       buttonPressStart(0),
       buttonPressFinish(0) {}
 
@@ -38,9 +47,20 @@ void InputManager::begin() {
 
   // Power button is digital, keep using Arduino API
   pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
+#if defined(XTEINK_X3_HARDWARE) && !defined(INPUT_MANAGER_TEST)
+  // E-paper refreshes can block loop() for longer than a normal button tap.
+  // Keep sampling on the single C3 core while rendering waits/yields.
+  samplerStarted = xTaskCreate([](void* context) {
+    auto* self = static_cast<InputManager*>(context);
+    for (;;) { self->poll(); vTaskDelay(pdMS_TO_TICKS(10)); }
+  }, "buttons", 2048, this, 2, nullptr) == pdPASS;
+#elif defined(INPUT_MANAGER_TEST)
+  samplerStarted = true; // Tests drive poll() with a deterministic clock.
+#endif
 }
 
 int InputManager::getButtonFromADC(const int adcValue, const int ranges[], const int numButtons) {
+  if (adcValue < 0 || adcValue > 4095) return -1;
   for (int i = 0; i < numButtons; i++) {
     if (ranges[i + 1] < adcValue && adcValue <= ranges[i]) {
       return i;
@@ -50,18 +70,26 @@ int InputManager::getButtonFromADC(const int adcValue, const int ranges[], const
   return -1;
 }
 
+static int readButtonADC(adc1_channel_t channel) {
+  // Discard the first conversion after switching channels, then reject outliers.
+  adc1_get_raw(channel);
+  int values[5];
+  for (int i=0;i<5;++i) values[i]=adc1_get_raw(channel);
+  std::sort(values,values+5);
+  return values[2];
+}
 uint8_t InputManager::getState() {
   uint8_t state = 0;
 
   // Read GPIO1 buttons using ESP-IDF API (no GPIO reconfiguration overhead)
-  const int adcValue1 = adc1_get_raw(ADC1_CHANNEL_1);
+  const int adcValue1 = readButtonADC(ADC1_CHANNEL_1);
   const int button1 = getButtonFromADC(adcValue1, ADC_RANGES_1, NUM_BUTTONS_1);
   if (button1 >= 0) {
     state |= (1 << button1);
   }
 
   // Read GPIO2 buttons using ESP-IDF API
-  const int adcValue2 = adc1_get_raw(ADC1_CHANNEL_2);
+  const int adcValue2 = readButtonADC(ADC1_CHANNEL_2);
   const int button2 = getButtonFromADC(adcValue2, ADC_RANGES_2, NUM_BUTTONS_2);
   if (button2 >= 0) {
     state |= (1 << (button2 + 4));
@@ -75,39 +103,37 @@ uint8_t InputManager::getState() {
   return state;
 }
 
-void InputManager::update() {
+void InputManager::poll() {
   const unsigned long currentTime = millis();
   const uint8_t state = getState();
-
-  // Always clear events first
-  pressedEvents = 0;
-  releasedEvents = 0;
-
-  // Debounce
-  if (state != lastState) {
-    lastDebounceTime = currentTime;
-    lastState = state;
-  }
-
-  if ((currentTime - lastDebounceTime) > DEBOUNCE_DELAY) {
-    if (state != currentState) {
-      // Calculate pressed and released events
-      pressedEvents = state & ~currentState;
-      releasedEvents = currentState & ~state;
-
-      // If pressing buttons and wasn't before, start recording time
-      if (pressedEvents > 0 && currentState == 0) {
-        buttonPressStart = currentTime;
-      }
-
-      // If releasing a button and no other buttons being pressed, record finish time
-      if (releasedEvents > 0 && state == 0) {
-        buttonPressFinish = currentTime;
-      }
-
-      currentState = state;
+  BUTTON_LOCK();
+  static constexpr uint8_t masks[] = {0x0f,0x30,0x40};
+  // Noise on one resistor ladder must not reset the other ladder's debounce.
+  for (int group=0;group<3;++group) {
+    uint8_t candidate = state & masks[group];
+    if (candidate != candidateGroup[group]) {
+      candidateGroup[group] = candidate; candidateSince[group] = currentTime;
+    }
+    uint8_t oldGroup = sampledState & masks[group];
+    if (currentTime-candidateSince[group] > DEBOUNCE_DELAY && candidate != oldGroup) {
+      uint8_t pressed = candidate & ~oldGroup;
+      uint8_t released = oldGroup & ~candidate;
+      if (pressed && sampledState==0) buttonPressStart = currentTime;
+      sampledState = (sampledState & ~masks[group]) | candidate;
+      if (released && sampledState==0) buttonPressFinish = currentTime;
+      pendingPressed |= pressed; pendingReleased |= released;
     }
   }
+  BUTTON_UNLOCK();
+}
+
+void InputManager::update() {
+  if (!samplerStarted) poll();
+  BUTTON_LOCK();
+  currentState = sampledState;
+  pressedEvents = pendingPressed; releasedEvents = pendingReleased;
+  pendingPressed = pendingReleased = 0;
+  BUTTON_UNLOCK();
 }
 
 bool InputManager::isPressed(const uint8_t buttonIndex) const {

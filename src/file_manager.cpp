@@ -1,12 +1,18 @@
 #include "file_manager.h"
 #include "text_editor.h"
+#include "note_format.h"
 #include <Arduino.h>
 #include <SDCardManager.h>
 #include <cstring>
+#include <algorithm>
 
 // --- File list ---
 static FileInfo fileList[MAX_FILES];
 static int fileCount = 0;
+static bool saveFailed = false;
+static const char* saveError = "";
+bool fileManagerSaveFailed() { return saveFailed; }
+const char* fileManagerSaveError() { return saveError; }
 
 // Shared state
 extern UIState currentState;
@@ -32,9 +38,9 @@ static void filenameToTitle(const char* filename, char* out, int maxLen) {
 }
 
 // Convert a title to a valid FAT filename (lowercase, spaces->underscores,
-// non-alphanumeric stripped, ".txt" appended).
-static void titleToFilename(const char* title, char* out, int maxLen) {
-  int maxBase = maxLen - 5; // room for ".txt" + null
+// non-alphanumeric stripped, requested extension appended).
+static void titleToFilename(const char* title, char* out, int maxLen, const char* extension) {
+  int maxBase = maxLen - static_cast<int>(strlen(extension)) - 1; // room for extension + null
   int j = 0;
   for (int i = 0; title[i] != '\0' && j < maxBase; i++) {
     char c = title[i];
@@ -47,27 +53,22 @@ static void titleToFilename(const char* title, char* out, int maxLen) {
   }
   while (j > 0 && out[j - 1] == '_') j--;
   if (j == 0) { strncpy(out, "note", maxLen - 1); j = 4; }
-  strcpy(out + j, ".txt");
+  strcpy(out + j, extension);
 }
 
 // Derive a unique /notes/ filename from a title, handling collisions with _2, _3 suffix.
-void deriveUniqueFilename(const char* title, char* out, int maxLen) {
-  titleToFilename(title, out, maxLen);
-
-  char path[320];
-  snprintf(path, sizeof(path), "/notes/%s", out);
-  if (!SdMan.exists(path)) return;
-
-  // Collision — strip .txt, try _2, _3 ...
+void deriveUniqueFilename(const char* title, char* out, int maxLen, const char* extension, const char* existing) {
+  titleToFilename(title, out, maxLen, extension);
   char base[MAX_FILENAME_LEN];
-  strncpy(base, out, maxLen - 1);
-  base[strlen(base) - 4] = '\0';
-
-  int suffix = 2;
-  while (SdMan.exists(path) && suffix <= 99) {
-    snprintf(out, maxLen, "%s_%d.txt", base, suffix++);
-    snprintf(path, sizeof(path), "/notes/%s", out);
+  strncpy(base, out, sizeof(base)-1); base[sizeof(base)-1]='\0';
+  base[strlen(base)-strlen(extension)]='\0';
+  for (int suffix=1; suffix<=9999; ++suffix) {
+    if (suffix>1) snprintf(out,maxLen,"%.*s_%d%s",maxLen-static_cast<int>(strlen(extension))-7,base,suffix,extension);
+    if (existing && strcasecmp(existing,out)==0) return;
+    char path[320]; snprintf(path,sizeof(path),"/notes/%s",out);
+    if (!SdMan.exists(path)) return;
   }
+  out[0]='\0';
 }
 
 void fileManagerSetup() {
@@ -80,6 +81,25 @@ void fileManagerSetup() {
     SdMan.mkdir("/notes");
   }
 
+  // If power failed between original -> .bak and .tmp -> original, restore
+  // the previous committed note. Uncommitted .tmp files remain for manual recovery.
+  auto recovery = SdMan.open("/notes");
+  if (recovery && recovery.isDirectory()) {
+    char name[256];
+    for (auto file=recovery.openNextFile(); file; file=recovery.openNextFile()) {
+      file.getName(name,sizeof(name));
+      bool regular = !file.isDirectory(); file.close();
+      size_t len=strlen(name);
+      if (!regular || len<=4 || strcmp(name+len-4,".bak")!=0) continue;
+      name[len-4]='\0';
+      if (!isNoteFile(name)) continue;
+      char original[320], backup[336];
+      snprintf(original,sizeof(original),"/notes/%s",name);
+      snprintf(backup,sizeof(backup),"%s.bak",original);
+      if (!SdMan.exists(original)) SdMan.rename(backup,original);
+    }
+    recovery.close();
+  }
   DBG_PRINTLN("SD Card initialized");
   refreshFileList();
 }
@@ -104,8 +124,7 @@ void refreshFileList() {
       continue;
     }
 
-    int nameLen = strlen(name);
-    if (nameLen > 4 && strcasecmp(name + nameLen - 4, ".txt") == 0) {
+    if (!file.isDirectory() && isNoteFile(name) && strlen(name) < MAX_FILENAME_LEN) {
       strncpy(fileList[fileCount].filename, name, MAX_FILENAME_LEN - 1);
       fileList[fileCount].filename[MAX_FILENAME_LEN - 1] = '\0';
 
@@ -134,9 +153,15 @@ void loadFile(const char* filename) {
     return;
   }
 
+  if (file.size() >= TEXT_BUFFER_SIZE) {
+    DBG_PRINTLN("Note too large: refused to open to avoid truncation");
+    file.close(); SdMan.sleep(); return;
+  }
+  size_t expected = file.size();
   char* buf = editorGetBuffer();
   int readResult = file.read(buf, TEXT_BUFFER_SIZE - 1);
   size_t bytesRead = (readResult > 0) ? (size_t)readResult : 0;
+  if (readResult < 0 || bytesRead != expected) { file.close(); SdMan.sleep(); return; }
   buf[bytesRead] = '\0';
   file.close();
 
@@ -155,8 +180,18 @@ void loadFile(const char* filename) {
 }
 
 void saveCurrentFile(bool refreshList) {
+  saveFailed = true;
+  saveError = "No filename available";
   const char* filename = editorGetCurrentFile();
-  if (filename[0] == '\0') return;
+  // Cancelling the title dialog must still leave a saveable new note.
+  char generated[MAX_FILENAME_LEN];
+  if (filename[0] == '\0') {
+    deriveUniqueFilename(editorGetCurrentTitle(), generated, sizeof(generated));
+    if (!generated[0]) return;
+    filename = generated;
+  }
+  saveError = "Cannot create notes folder";
+  if (!SdMan.exists("/notes") && !SdMan.mkdir("/notes")) { SdMan.sleep(); return; }
 
   char path[320], tmpPath[336], bakPath[336];
   snprintf(path, sizeof(path), "/notes/%s", filename);
@@ -164,9 +199,11 @@ void saveCurrentFile(bool refreshList) {
   snprintf(bakPath, sizeof(bakPath), "%s.bak", path);
 
   // Step 1: Write new content to .tmp
+  saveError = "Cannot open temporary file";
   auto file = SdMan.open(tmpPath, O_WRONLY | O_CREAT | O_TRUNC);
   if (!file) {
     DBG_PRINTF("saveCurrentFile: could not create tmp: %s\n", tmpPath);
+    SdMan.sleep();
     return;
   }
 
@@ -176,20 +213,43 @@ void saveCurrentFile(bool refreshList) {
 
   // Step 2: Verify bytes written match expected length
   if (written != toWrite) {
+    saveError = "Write incomplete";
     DBG_PRINTF("saveCurrentFile: write mismatch (%d/%d) — aborting\n", (int)written, (int)toWrite);
     SdMan.remove(tmpPath);
+    SdMan.sleep();
     return;
   }
 
-  // Step 3: Rotate original → .bak (original is now safe in .tmp, preserve previous .bak)
-  if (SdMan.exists(path)) {
-    SdMan.remove(bakPath);          // Remove old .bak (if any)
-    SdMan.rename(path, bakPath);    // Original becomes new .bak
+  // Read back before rotating the previous version. A short or corrupt write
+  // must leave both the original and the dirty editor buffer intact.
+  auto check = SdMan.open(tmpPath, O_RDONLY);
+  bool verified = check && check.size() == toWrite;
+  uint8_t chunk[128]; size_t offset = 0;
+  while (verified && offset < toWrite) {
+    size_t count = std::min(sizeof(chunk), toWrite-offset);
+    int got = check.read(chunk, count);
+    verified = got == static_cast<int>(count) && memcmp(chunk, editorGetBuffer()+offset, count)==0;
+    offset += count;
+  }
+  if (check) check.close();
+  saveError = "Read-back failed";
+  if (!verified) { SdMan.remove(tmpPath); SdMan.sleep(); return; }
+  bool hadOriginal = SdMan.exists(path);
+  if (hadOriginal) {
+    saveError = "Cannot rotate backup";
+    if (SdMan.exists(bakPath) && !SdMan.remove(bakPath)) { SdMan.sleep(); return; }
+    saveError = "Cannot preserve previous note";
+    if (!SdMan.rename(path, bakPath)) { SdMan.sleep(); return; }
+  }
+  saveError = "Cannot commit note";
+  if (!SdMan.rename(tmpPath, path)) {
+    if (hadOriginal) SdMan.rename(bakPath, path);
+    SdMan.sleep(); return;
   }
 
-  // Step 4: Promote .tmp → original
-  SdMan.rename(tmpPath, path);
-
+  saveFailed = false;
+  saveError = "";
+  if (filename == generated) editorSetCurrentFile(generated);
   editorSetUnsavedChanges(false);
   if (refreshList) refreshFileList();
   SdMan.sleep();
@@ -197,6 +257,8 @@ void saveCurrentFile(bool refreshList) {
 }
 
 void createNewFile() {
+  saveFailed = false;
+  saveError = "";
   editorClear();
   editorSetCurrentFile("");       // filename derived from title when user confirms
   editorSetCurrentTitle("Untitled");
@@ -206,13 +268,14 @@ void createNewFile() {
 // Rename a file on disk to match a new title, updating editor state if needed.
 void updateFileTitle(const char* filename, const char* newTitle) {
   char newFilename[MAX_FILENAME_LEN];
-  deriveUniqueFilename(newTitle, newFilename, MAX_FILENAME_LEN);
+  deriveUniqueFilename(newTitle, newFilename, MAX_FILENAME_LEN, isLegacyNote(filename) ? ".txt" : ".md", filename);
+  if (!newFilename[0]) return;
 
   if (strcmp(newFilename, filename) != 0) {
     char oldPath[320], newPath[320];
     snprintf(oldPath, sizeof(oldPath), "/notes/%s", filename);
     snprintf(newPath, sizeof(newPath), "/notes/%s", newFilename);
-    SdMan.rename(oldPath, newPath);
+    if (!SdMan.rename(oldPath, newPath)) { SdMan.sleep(); return; }
 
     if (strcmp(editorGetCurrentFile(), filename) == 0) {
       editorSetCurrentFile(newFilename);

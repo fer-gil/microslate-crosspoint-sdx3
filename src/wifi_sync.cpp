@@ -1,6 +1,7 @@
 #include "wifi_sync.h"
 #include "config.h"
 #include "file_manager.h"
+#include "note_format.h"
 #include "sd_backup.h"
 
 #include <Arduino.h>
@@ -456,8 +457,7 @@ static void handleFileList() {
     file.getName(name, sizeof(name));
     if (name[0] == '.') { file.close(); continue; }
 
-    int nameLen = strlen(name);
-    if (nameLen > 4 && strcmp(name + nameLen - 4, ".txt") == 0) {
+    if (!file.isDirectory() && isNoteFile(name)) {
       if (!first) json += ",";
       first = false;
       json += "{\"name\":\"";

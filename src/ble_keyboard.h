@@ -53,3 +53,4 @@ uint32_t getScanAgeMs();
 void refreshScanNow();
 void clearAllBluetoothBonds();
 void cancelPendingConnection();
+bool blePrepareForAppSwitch(uint32_t timeoutMs = 2000);

@@ -1,6 +1,8 @@
 #include "text_editor.h"
 #include <cstring>
 #include <algorithm>
+#include "markdown.h"
+#include "note_format.h"
 
 // --- Text buffer ---
 static char textBuffer[TEXT_BUFFER_SIZE];
@@ -22,6 +24,14 @@ static int charsPerLine = 40;
 static int storedVisibleLines = 20;  // Updated by renderer each frame
 static bool lineBreaksDirty = true;  // Only recompute line breaks when buffer/charsPerLine changes
 
+static uint8_t markdownFlags[TEXT_BUFFER_SIZE];
+static bool parseDirty = true;
+static bool visualMode = true;
+static int layoutWidth = 0;
+static int layoutEpoch = -1;
+static EditorMeasure measureGlyph = nullptr;
+static markdown::Range activeRange{0, 0};
+
 // Forward declaration
 static void ensureCursorVisible(int visibleLines);
 
@@ -29,47 +39,39 @@ static void ensureCursorVisible(int visibleLines);
 // The O(textLength) line break loop only runs when the buffer or charsPerLine changed.
 // Cursor line/col is always recomputed (cheap O(cursorLine) with early exit).
 void editorRecalculateLines() {
+  if (parseDirty) {
+    markdown::parse(textBuffer, textLength, markdownFlags);
+    parseDirty = false;
+    lineBreaksDirty = true;
+  }
+  auto active = markdown::paragraph(textBuffer, textLength, cursorPosition);
+  if (active.begin != activeRange.begin || active.end != activeRange.end) {
+    activeRange = active;
+    lineBreaksDirty = true;
+  }
   if (lineBreaksDirty) {
-    lineCount = 0;
-    linePositions[0] = 0;
     lineCount = 1;
-
-    int col = 0;
+    linePositions[0] = 0;
+    int width = 0;
     int lastSpace = -1;
-
-    for (int i = 0; i < (int)textLength && lineCount < MAX_LINES; i++) {
+    for (size_t i = 0; i < textLength;) {
       if (textBuffer[i] == '\n') {
-        // Hard line break
-        if (lineCount < MAX_LINES) {
-          linePositions[lineCount] = i + 1;
-          lineCount++;
-        }
-        col = 0;
-        lastSpace = -1;
+        if (lineCount < MAX_LINES) linePositions[lineCount++] = i + 1;
+        width = 0; lastSpace = -1; ++i; continue;
+      }
+      char glyph[5]; uint8_t style;
+      size_t end = editorGetGlyph(i, glyph, style);
+      int w = glyph[0] ? (measureGlyph ? measureGlyph(glyph, style) : 1) : 0;
+      int limit = layoutWidth > 0 ? layoutWidth : charsPerLine;
+      if (width + w > limit && width > 0 && lineCount < MAX_LINES) {
+        int split = lastSpace > linePositions[lineCount-1] ? lastSpace : static_cast<int>(i);
+        linePositions[lineCount++] = split;
+        i = split; width = 0; lastSpace = -1;
         continue;
       }
-
-      if (textBuffer[i] == ' ') {
-        lastSpace = i;
-      }
-
-      col++;
-      if (col >= charsPerLine) {
-        // Word wrap
-        int breakPos;
-        if (lastSpace > linePositions[lineCount - 1]) {
-          breakPos = lastSpace + 1; // Break after space
-        } else {
-          breakPos = i + 1;  // Hard break mid-word
-        }
-
-        if (lineCount < MAX_LINES) {
-          linePositions[lineCount] = breakPos;
-          lineCount++;
-        }
-        col = i + 1 - breakPos;
-        lastSpace = -1;
-      }
+      width += w;
+      if (glyph[0] == ' ') lastSpace = end;
+      i = end;
     }
     lineBreaksDirty = false;
   }
@@ -83,7 +85,8 @@ void editorRecalculateLines() {
       break;
     }
   }
-  cursorCol = cursorPosition - linePositions[cursorLine];
+  cursorCol = 0;
+  for (size_t p = linePositions[cursorLine]; p < static_cast<size_t>(cursorPosition); p = markdown::next(textBuffer, textLength, p)) ++cursorCol;
 }
 
 // Ensure cursor is visible by adjusting viewport
@@ -109,6 +112,7 @@ void editorInit() {
   unsavedChanges = false;
   viewportStartLine = 0;
   lineBreaksDirty = true;
+  parseDirty = true;
   editorRecalculateLines();
 }
 
@@ -119,15 +123,17 @@ void editorClear() {
   unsavedChanges = false;
   viewportStartLine = 0;
   lineBreaksDirty = true;
+  parseDirty = true;
   editorRecalculateLines();
 }
 
 void editorLoadBuffer(size_t length) {
-  textLength = length;
+  textLength = std::min(length, TEXT_BUFFER_SIZE - 1);
   textBuffer[textLength] = '\0';
   cursorPosition = (int)textLength;  // Start at end
   viewportStartLine = 0;
   lineBreaksDirty = true;
+  parseDirty = true;
   editorRecalculateLines();
   // Scroll to show cursor
   ensureCursorVisible(storedVisibleLines);
@@ -151,35 +157,33 @@ int editorGetWordCount() {
   return count;
 }
 
+void editorInsertText(const char* text) {
+  if (!text || !text[0]) return;
+  size_t count = strlen(text);
+  if (textLength + count >= TEXT_BUFFER_SIZE) return;
+  memmove(textBuffer + cursorPosition + count, textBuffer + cursorPosition, textLength - cursorPosition + 1);
+  memcpy(textBuffer + cursorPosition, text, count);
+  cursorPosition += count; textLength += count;
+  unsavedChanges = true; lineBreaksDirty = true; parseDirty = true;
+  editorRecalculateLines(); ensureCursorVisible(storedVisibleLines);
+}
 void editorInsertChar(char c) {
-  if (textLength >= TEXT_BUFFER_SIZE - 1) return;
-
-  // Shift text right
-  for (int i = (int)textLength; i > cursorPosition; i--) {
-    textBuffer[i] = textBuffer[i - 1];
-  }
-  textBuffer[cursorPosition] = c;
-  cursorPosition++;
-  textLength++;
-  textBuffer[textLength] = '\0';
-  unsavedChanges = true;
-  lineBreaksDirty = true;
-
-  editorRecalculateLines();
-  ensureCursorVisible(storedVisibleLines);
+  char text[2] = {c, '\0'};
+  editorInsertText(text);
 }
 
 void editorDeleteChar() {
   if (cursorPosition <= 0 || textLength == 0) return;
 
-  for (int i = cursorPosition - 1; i < (int)textLength - 1; i++) {
-    textBuffer[i] = textBuffer[i + 1];
-  }
-  cursorPosition--;
-  textLength--;
+  int start = markdown::previous(textBuffer, cursorPosition);
+  int count = cursorPosition - start;
+  memmove(textBuffer + start, textBuffer + cursorPosition, textLength - cursorPosition);
+  cursorPosition = start;
+  textLength -= count;
   textBuffer[textLength] = '\0';
   unsavedChanges = true;
   lineBreaksDirty = true;
+  parseDirty = true;
 
   editorRecalculateLines();
   ensureCursorVisible(storedVisibleLines);
@@ -188,13 +192,13 @@ void editorDeleteChar() {
 void editorDeleteForward() {
   if (cursorPosition >= (int)textLength) return;
 
-  for (int i = cursorPosition; i < (int)textLength - 1; i++) {
-    textBuffer[i] = textBuffer[i + 1];
-  }
-  textLength--;
+  size_t end = markdown::next(textBuffer, textLength, cursorPosition);
+  memmove(textBuffer + cursorPosition, textBuffer + end, textLength - end);
+  textLength -= end - cursorPosition;
   textBuffer[textLength] = '\0';
   unsavedChanges = true;
   lineBreaksDirty = true;
+  parseDirty = true;
 
   editorRecalculateLines();
   ensureCursorVisible(storedVisibleLines);
@@ -202,7 +206,7 @@ void editorDeleteForward() {
 
 void editorMoveCursorLeft() {
   if (cursorPosition > 0) {
-    cursorPosition--;
+    cursorPosition = markdown::previous(textBuffer, cursorPosition);
     editorRecalculateLines();
     ensureCursorVisible(storedVisibleLines);
   }
@@ -210,7 +214,7 @@ void editorMoveCursorLeft() {
 
 void editorMoveCursorRight() {
   if (cursorPosition < (int)textLength) {
-    cursorPosition++;
+    cursorPosition = markdown::next(textBuffer, textLength, cursorPosition);
     editorRecalculateLines();
     ensureCursorVisible(storedVisibleLines);
   }
@@ -227,7 +231,10 @@ void editorMoveCursorUp() {
   // Don't count trailing newline
   if (lineLen > 0 && textBuffer[lineStart + lineLen - 1] == '\n') lineLen--;
 
-  cursorPosition = lineStart + std::min(cursorCol, lineLen);
+  size_t target = lineStart;
+  for (int col=0; col<cursorCol && target<static_cast<size_t>(lineStart+lineLen); ++col)
+    target = markdown::next(textBuffer, textLength, target);
+  cursorPosition = target;
   editorRecalculateLines();
   ensureCursorVisible(storedVisibleLines);
 }
@@ -241,7 +248,10 @@ void editorMoveCursorDown() {
   int lineLen = lineEnd - lineStart;
   if (lineLen > 0 && textBuffer[lineStart + lineLen - 1] == '\n') lineLen--;
 
-  cursorPosition = lineStart + std::min(cursorCol, lineLen);
+  size_t target = lineStart;
+  for (int col=0; col<cursorCol && target<static_cast<size_t>(lineStart+lineLen); ++col)
+    target = markdown::next(textBuffer, textLength, target);
+  cursorPosition = target;
   editorRecalculateLines();
   ensureCursorVisible(storedVisibleLines);
 }
@@ -268,7 +278,7 @@ void editorMoveCursorEnd() {
 
 void editorSetCharsPerLine(int cpl) {
   if (cpl != charsPerLine) {
-    charsPerLine = cpl;
+    charsPerLine = std::max(1, cpl);
     lineBreaksDirty = true;
   }
   editorRecalculateLines();
@@ -300,6 +310,7 @@ int editorGetLinePosition(int lineIndex) {
 void editorSetCurrentFile(const char* filename) {
   strncpy(currentFile, filename, MAX_FILENAME_LEN - 1);
   currentFile[MAX_FILENAME_LEN - 1] = '\0';
+  lineBreaksDirty = true;
 }
 
 void editorSetCurrentTitle(const char* title) {
@@ -311,3 +322,32 @@ const char* editorGetCurrentFile() { return currentFile; }
 const char* editorGetCurrentTitle() { return currentTitle; }
 bool editorHasUnsavedChanges() { return unsavedChanges; }
 void editorSetUnsavedChanges(bool v) { unsavedChanges = v; }
+
+void editorSetLayout(int width, EditorMeasure measure, int epoch) {
+  if (width != layoutWidth || measure != measureGlyph || epoch != layoutEpoch) {
+    layoutWidth = std::max(1, width); measureGlyph = measure; layoutEpoch = epoch;
+    lineBreaksDirty = true;
+  }
+  editorRecalculateLines();
+  ensureCursorVisible(storedVisibleLines);
+}
+void editorToggleVisual() {
+  visualMode = !visualMode;
+  lineBreaksDirty = true;
+  editorRecalculateLines();
+  ensureCursorVisible(storedVisibleLines);
+}
+bool editorIsVisual() { return visualMode && isMarkdownNote(currentFile); }
+size_t editorGetGlyph(size_t offset, char out[5], uint8_t& style) {
+  style = 0; out[0] = '\0';
+  if (offset >= textLength) return textLength;
+  size_t end = markdown::next(textBuffer, textLength, offset);
+  if (editorIsVisual() && !(offset >= activeRange.begin && offset < activeRange.end))
+    style = markdownFlags[offset];
+  if (style & markdown::Hidden) return end;
+  if (style & markdown::Bullet) { strcpy(out, "•"); return end; }
+  if (textBuffer[offset] == '\t') { strcpy(out, " "); return end; }
+  size_t count = std::min<size_t>(4, end-offset);
+  memcpy(out, textBuffer+offset, count); out[count] = '\0';
+  return end;
+}

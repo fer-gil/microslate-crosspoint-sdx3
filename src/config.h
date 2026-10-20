@@ -9,6 +9,7 @@ enum class UIState {
   FILE_BROWSER,
   TEXT_EDITOR,
   RENAME_FILE,
+  SAVE_ERROR,
   NEW_FILE,
   SETTINGS,
   BLUETOOTH_SETTINGS,
@@ -61,6 +62,17 @@ struct FileInfo {
 static constexpr unsigned long AUTO_SAVE_IDLE_MS = 10000;    // Save after 10s of no keystrokes
 static constexpr unsigned long AUTO_SAVE_MAX_MS  = 120000;   // Hard cap: save every 2min during continuous typing
 
+// --- OTA App Detection ---
+static constexpr int MAX_OTA_APPS = 4;
+
+struct OtaAppEntry {
+  char name[32];
+  int partitionSubtype;
+};
+
+extern OtaAppEntry otaApps[];
+extern int otaAppCount;
+
 // --- Buffer/Queue Sizes ---
 static constexpr size_t TEXT_BUFFER_SIZE = 16384;
 static constexpr int MAX_FILES = 50;
@@ -89,6 +101,7 @@ static constexpr uint8_t HID_KEY_A          = 0x04;
 static constexpr uint8_t HID_KEY_B          = 0x05;
 static constexpr uint8_t HID_KEY_D          = 0x07;
 static constexpr uint8_t HID_KEY_F          = 0x09;
+static constexpr uint8_t HID_KEY_M          = 0x10;
 static constexpr uint8_t HID_KEY_N          = 0x11;
 static constexpr uint8_t HID_KEY_P          = 0x13;
 static constexpr uint8_t HID_KEY_Q          = 0x14;

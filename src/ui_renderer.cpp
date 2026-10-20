@@ -1,7 +1,9 @@
 #include "ui_renderer.h"
 #include "config.h"
 #include "text_editor.h"
+#include "markdown.h"
 #include "file_manager.h"
+#include "input_handler.h"
 #include "ble_keyboard.h"
 #include "wifi_sync.h"
 
@@ -30,29 +32,45 @@ uint32_t getScanAgeMs();
 // Font data includes
 #include <builtinFonts/notosans_16_regular.h>
 #include <builtinFonts/notosans_16_bold.h>
+#include <builtinFonts/notosans_16_italic.h>
+#include <builtinFonts/notosans_16_bolditalic.h>
 #include <builtinFonts/notosans_14_regular.h>
 #include <builtinFonts/notosans_14_bold.h>
+#include <builtinFonts/notosans_14_italic.h>
+#include <builtinFonts/notosans_14_bolditalic.h>
 #include <builtinFonts/notosans_12_regular.h>
 #include <builtinFonts/notosans_12_bold.h>
+#include <builtinFonts/notosans_12_italic.h>
+#include <builtinFonts/notosans_12_bolditalic.h>
 #include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_10_bold.h>
 
 // Font objects (file-scoped)
 static EpdFont ns16Regular(&notosans_16_regular);
 static EpdFont ns16Bold(&notosans_16_bold);
-static EpdFontFamily ns16Family(&ns16Regular, &ns16Bold);
+static EpdFont ns16Italic(&notosans_16_italic);
+static EpdFont ns16BoldItalic(&notosans_16_bolditalic);
+static EpdFontFamily ns16Family(&ns16Regular, &ns16Bold, &ns16Italic, &ns16BoldItalic);
 
 static EpdFont ns14Regular(&notosans_14_regular);
 static EpdFont ns14Bold(&notosans_14_bold);
-static EpdFontFamily ns14Family(&ns14Regular, &ns14Bold);
+static EpdFont ns14Italic(&notosans_14_italic);
+static EpdFont ns14BoldItalic(&notosans_14_bolditalic);
+static EpdFontFamily ns14Family(&ns14Regular, &ns14Bold, &ns14Italic, &ns14BoldItalic);
 
 static EpdFont ns12Regular(&notosans_12_regular);
 static EpdFont ns12Bold(&notosans_12_bold);
-static EpdFontFamily ns12Family(&ns12Regular, &ns12Bold);
+static EpdFont ns12Italic(&notosans_12_italic);
+static EpdFont ns12BoldItalic(&notosans_12_bolditalic);
+static EpdFontFamily ns12Family(&ns12Regular, &ns12Bold, &ns12Italic, &ns12BoldItalic);
 
 static EpdFont u10Regular(&ubuntu_10_regular);
 static EpdFont u10Bold(&ubuntu_10_bold);
 static EpdFontFamily u10Family(&u10Regular, &u10Bold);
+
+// OTA app detection (defined in main.cpp)
+extern OtaAppEntry otaApps[];
+extern int otaAppCount;
 
 // Extern shared state (defined in main.cpp)
 extern UIState currentState;
@@ -205,12 +223,12 @@ void drawMainMenu(GfxRenderer& renderer, HalGPIO& gpio) {
   // Title
   renderer.drawCenteredText(FONT_BODY, 30, "MicroSlate", tc, EpdFontFamily::BOLD);
 
-  // Menu items
+  // Menu items (base + dynamically detected OTA apps)
   static const char* baseMenuItems[] = {"Browse Files", "New Note", "Settings", "Sync"};
-  constexpr int menuCount = 4;
+  int menuCount = 4 + otaAppCount;
   for (int i = 0; i < menuCount; i++) {
     int yPos = 90 + (i * 45);
-    const char* label = baseMenuItems[i];
+    const char* label = (i < 4) ? baseMenuItems[i] : otaApps[i - 4].name;
     if (i == mainMenuSelection) {
       clippedFillRect(renderer, 5, yPos - 5, sw - 10, 35, tc);
       drawClippedText(renderer, FONT_UI, 20, yPos, label, sw - 40, !tc);
@@ -277,54 +295,47 @@ void drawFileBrowser(GfxRenderer& renderer, HalGPIO& gpio) {
     drawFooterHints(renderer, sh - footerH + 4, tc, {"Delete?", "Enter:Yes", "Esc:No"});
   } else {
     drawClippedText(renderer, FONT_SMALL, 10, sh - footerH + 4,
-                    "Ctrl+N:Title  Ctrl+D:Delete", 0, tc);
+                    "Ctrl+N:New  F2:Title  Ctrl+D:Delete", 0, tc);
   }
 
   renderer.beginRefresh(HalDisplay::FAST_REFRESH);
 }
 
-// Helper: draw a single editor line from the buffer
+static GfxRenderer* editorRenderer = nullptr;
+static int glyphFont(uint8_t style) {
+  return (style & markdown::Note) ? FONT_UI : (style & markdown::Heading) ? FONT_LARGE : editorFontId(fontSize);
+}
+static EpdFontFamily::Style glyphStyle(uint8_t style) {
+  return static_cast<EpdFontFamily::Style>(((style & markdown::Bold) ? 1 : 0) | ((style & markdown::Italic) ? 2 : 0));
+}
+static int glyphWidth(const char* glyph, uint8_t style) {
+  return editorRenderer->getTextAdvanceX(glyphFont(style), glyph, glyphStyle(style));
+}
+// Rendering and wrapping use exactly the same glyphs, style and advance widths.
 static void drawEditorLine(GfxRenderer& renderer, int lineIdx, int x, int yPos,
                            int maxW, bool tc) {
-  char* buf = editorGetBuffer();
-  size_t bufLen = editorGetLength();
-  int totalLines = editorGetLineCount();
-
-  int lineStart = editorGetLinePosition(lineIdx);
-  int lineEnd = (lineIdx + 1 < totalLines) ? editorGetLinePosition(lineIdx + 1) : (int)bufLen;
-  int dispEnd = lineEnd;
-  if (dispEnd > lineStart && buf[dispEnd - 1] == '\n') dispEnd--;
-
-  int len = dispEnd - lineStart;
-  if (len > 0) {
-    char lineBuf[256];
-    int copyLen = (len < (int)sizeof(lineBuf) - 1) ? len : (int)sizeof(lineBuf) - 1;
-    strncpy(lineBuf, buf + lineStart, copyLen);
-    lineBuf[copyLen] = '\0';
-    drawClippedText(renderer, editorFontId(fontSize), x, yPos, lineBuf, maxW, tc);
+  size_t start = editorGetLinePosition(lineIdx);
+  size_t end = lineIdx+1 < editorGetLineCount() ? editorGetLinePosition(lineIdx+1) : editorGetLength();
+  int right = x + maxW;
+  for (size_t p=start; p<end;) {
+    char glyph[5]; uint8_t style;
+    p = editorGetGlyph(p, glyph, style);
+    if (!glyph[0] || glyph[0]=='\n' || glyph[0]=='\r') continue;
+    int width = glyphWidth(glyph, style);
+    if (x+width > right) break;
+    drawClippedText(renderer, glyphFont(style), x, yPos, glyph, right-x, tc, glyphStyle(style));
+    x += width;
   }
 }
-
-// Helper: draw cursor at the given screen position
 static void drawEditorCursor(GfxRenderer& renderer, int cursorY, int lineHeight,
                              int sw, bool tc) {
-  int curLine = editorGetCursorLine();
-  int curCol = editorGetCursorCol();
-  char* buf = editorGetBuffer();
-
-  int lineStart = editorGetLinePosition(curLine);
-  char prefix[256];
-  int prefixLen = (curCol < (int)sizeof(prefix) - 1) ? curCol : (int)sizeof(prefix) - 1;
-  strncpy(prefix, buf + lineStart, prefixLen);
-  prefix[prefixLen] = '\0';
-
-  int cursorX = 10 + renderer.getTextAdvanceX(editorFontId(fontSize), prefix);
-  int cursorW = renderer.getSpaceWidth(editorFontId(fontSize));
-  if (cursorW < 2) cursorW = 8;
-
-  if (cursorX >= 0 && cursorX + cursorW <= sw && cursorY >= 0 && cursorY + lineHeight <= renderer.getScreenHeight()) {
-    renderer.fillRect(cursorX, cursorY, cursorW, lineHeight, tc);
+  int x = 10;
+  for (size_t p=editorGetLinePosition(editorGetCursorLine()); p<static_cast<size_t>(editorGetCursorPosition());) {
+    char glyph[5]; uint8_t style;
+    p = editorGetGlyph(p, glyph, style);
+    if (glyph[0] && glyph[0]!='\n' && glyph[0]!='\r') x += glyphWidth(glyph, style);
   }
+  clippedFillRect(renderer, x, cursorY, 2, lineHeight, tc);
 }
 
 // Get the mode indicator string for the current writing mode
@@ -332,7 +343,7 @@ static const char* getModeIndicator() {
   switch (writingMode) {
     case WritingMode::TYPEWRITER: return "[T]";
     case WritingMode::PAGINATION: return "[P]";
-    default:                      return "[S]";
+    default:                      return editorIsVisual() ? "[MD]" : "[S]";
   }
 }
 
@@ -345,7 +356,7 @@ static int drawEditorHeader(GfxRenderer& renderer, HalGPIO& gpio, int sw, bool t
   const char* title = editorGetCurrentTitle();
   char headerBuf[64];
   if (editorHasUnsavedChanges()) {
-    snprintf(headerBuf, sizeof(headerBuf), "%s *", title);
+    snprintf(headerBuf, sizeof(headerBuf), "%s %s", title, fileManagerSaveFailed() ? "[Save failed]" : "*");
   } else {
     strncpy(headerBuf, title, sizeof(headerBuf) - 1);
     headerBuf[sizeof(headerBuf) - 1] = '\0';
@@ -386,6 +397,15 @@ static int drawEditorHeader(GfxRenderer& renderer, HalGPIO& gpio, int sw, bool t
 }
 
 void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
+  // Cursor-only moves need a scrub waveform to erase the previous thin caret.
+  // A fast differential can leave it visible on this UC8253 panel.
+  static int lastRenderedCursor = -1;
+  static size_t lastRenderedLength = 0;
+  int cursor = editorGetCursorPosition();
+  size_t length = editorGetLength();
+  auto editorRefresh = (cursor != lastRenderedCursor && length == lastRenderedLength)
+      ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  lastRenderedCursor = cursor; lastRenderedLength = length;
   renderer.clearScreen();
   int sw = renderer.getScreenWidth();
   int sh = renderer.getScreenHeight();
@@ -393,7 +413,9 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
 
   if (darkMode) clippedFillRect(renderer, 0, 0, sw, sh, true);
 
-  int lineHeight = renderer.getLineHeight(editorFontId(fontSize));
+  editorRenderer = &renderer;
+  editorSetLayout(sw - 24, glyphWidth, static_cast<int>(fontSize));
+  int lineHeight = renderer.getLineHeight(FONT_LARGE);
   if (lineHeight <= 0) lineHeight = 20;
   int totalLines = editorGetLineCount();
   int curLine = editorGetCursorLine();
@@ -417,7 +439,7 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
 
     editorSetVisibleLines(1);
 
-    renderer.beginRefresh(HalDisplay::FAST_REFRESH);
+    renderer.beginRefresh(editorRefresh);
     return;
   }
 
@@ -459,7 +481,7 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
       drawEditorCursor(renderer, cursorY, lineHeight, sw, tc);
     }
 
-    renderer.beginRefresh(HalDisplay::FAST_REFRESH);
+    renderer.beginRefresh(editorRefresh);
     return;
   }
 
@@ -473,8 +495,6 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
   editorSetVisibleLines(visibleLines);
 
   int vpStart = editorGetViewportStart();
-  char* buf = editorGetBuffer();
-  size_t bufLen = editorGetLength();
 
   // Draw visible lines
   for (int i = 0; i < visibleLines && (vpStart + i) < totalLines; i++) {
@@ -488,6 +508,28 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
     drawEditorCursor(renderer, cursorY, lineHeight, sw, tc);
   }
 
+  renderer.beginRefresh(editorRefresh);
+}
+
+void drawSaveErrorScreen(GfxRenderer& renderer, HalGPIO& gpio) {
+  renderer.clearScreen();
+  int sw = renderer.getScreenWidth();
+  int sh = renderer.getScreenHeight();
+  bool tc = !darkMode;
+  if (darkMode) clippedFillRect(renderer, 0, 0, sw, sh, true);
+  drawClippedText(renderer, FONT_UI, 15, 8, "Save failed", 0, tc, EpdFontFamily::BOLD);
+  drawBattery(renderer, gpio);
+  drawClippedText(renderer, FONT_UI, 15, 48, "Your text is still in memory.", sw - 30, tc);
+  drawClippedText(renderer, FONT_SMALL, 15, 76, fileManagerSaveError(), sw - 30, tc);
+  drawClippedText(renderer, FONT_SMALL, 15, 100, "Discard loses changes since the last save.", sw - 30, tc);
+  const char* choices[] = {"Retry saving", "Keep editing", "Discard changes and leave"};
+  for (int i = 0; i < 3; ++i) {
+    int y = 145 + i * 36;
+    bool selected = i == getSaveErrorSelection();
+    if (selected) clippedFillRect(renderer, 10, y - 4, sw - 20, 30, tc);
+    drawClippedText(renderer, FONT_UI, 20, y, choices[i], sw - 40, selected ? !tc : tc);
+  }
+  drawFooterHints(renderer, sh - 30, tc, {"Arrows: Choose", "Enter: Select", "Esc: Edit"});
   renderer.beginRefresh(HalDisplay::FAST_REFRESH);
 }
 

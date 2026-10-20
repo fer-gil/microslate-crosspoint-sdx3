@@ -8,3 +8,6 @@
 .DS_Store
 Thumbs.db
 .claude
+# Device backups contain private settings; never publish them.
+/backups/
+/artifacts/

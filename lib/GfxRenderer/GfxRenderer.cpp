@@ -693,7 +693,7 @@ int GfxRenderer::getSpaceWidth(const int fontId) const {
   return fontMap.at(fontId).getGlyph(' ', EpdFontFamily::REGULAR)->advanceX;
 }
 
-int GfxRenderer::getTextAdvanceX(const int fontId, const char* text) const {
+int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (fontMap.count(fontId) == 0) {
     Serial.printf("[%lu] [GFX] Font %d not found\n", millis(), fontId);
     return 0;
@@ -702,7 +702,8 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text) const {
   uint32_t cp;
   int width = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
-    width += fontMap.at(fontId).getGlyph(cp, EpdFontFamily::REGULAR)->advanceX;
+    const auto glyph = fontMap.at(fontId).getGlyph(cp, style);
+    if (glyph) width += glyph->advanceX;
   }
   return width;
 }

@@ -1,3 +1,6 @@
+#include "hid_report.h"
+#include "ble_connection.h"
+#include <atomic>
 #include "ble_keyboard.h"
 #include "input_handler.h"
 #include "sd_backup.h"
@@ -5,24 +8,19 @@
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 
-// HID service and characteristic UUIDs
-static NimBLEUUID hidServiceUUID("1812");
-static NimBLEUUID reportUUID("2a4d");
-static NimBLEUUID reportMapUUID("2a4b");
-static NimBLEUUID protocolModeUUID("2a4e");
-static NimBLEUUID bootKeyboardInUUID("2a22");
-
 // Module state
 static NimBLEClient* pClient = nullptr;
-static NimBLERemoteService* pRemoteService = nullptr;
-static NimBLERemoteCharacteristic* pInputReportChar = nullptr;
 
-static BLEState bleState = BLEState::DISCONNECTED;
+static std::atomic<BLEState> bleState{BLEState::DISCONNECTED};
+static std::atomic<uint32_t> linkEpoch{0};
+static std::atomic<bool> connectFailed{false};
+static std::atomic<int> pendingDisconnectReason{0};
+static std::atomic<bool> switchingApp{false};
 static bool connectToKeyboard = false;
 static std::string keyboardAddress = "";
 static uint8_t keyboardAddressType = 0;
 static uint8_t lastReport[8] = {0};
-static uint8_t inputReportId = 0;   // Non-zero if keyboard prefixes reports with a report ID
+static uint8_t inputReportId = 0;   // Report Reference ID learned from the input characteristic
 
 // NVS storage for persistent pairing
 static Preferences prefs;
@@ -51,7 +49,7 @@ static constexpr uint32_t DEVICE_STALE_MS = 10000;  // 10 seconds - reduced to p
 
 // FreeRTOS connect task
 static TaskHandle_t connectTaskHandle = nullptr;
-static volatile bool authSuccess = false;
+static std::atomic<bool> authSuccess{false};
 
 // Connection timeout in seconds
 static constexpr uint32_t CONNECT_TIMEOUT_MS = 10000;
@@ -87,39 +85,11 @@ static void pruneStaleDevices() {
 // Keyboard notification callback
 static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
                               uint8_t* pData, size_t length, bool isNotify) {
-  // Strip report ID prefix if the keyboard uses one (learned during HID discovery).
-  // e.g. 9-byte: [ReportID][Mod][Reserved][K1-K6]  →  strip to 8-byte standard
-  //      8-byte: [ReportID][Mod][K1-K6]             →  strip to 7-byte compact
-  if (inputReportId != 0 && length > 0 && pData[0] == inputReportId) {
-    pData++;
-    length--;
-  }
-
-  // Must be 7 or 8 bytes after stripping. Consumer-control / media-key reports
-  // from other report IDs arrive here too — silently ignore them.
-  if (length < 7 || length > 8) {
-    DBG_PRINTF("[KB-Notify] Ignoring %d-byte report (not keyboard format)\n", (int)length);
+  uint8_t newReport[8] = {0};
+  if (!normalizeKeyboardReport(pData, length, inputReportId, newReport)) {
     return;
   }
-
-  uint8_t modifiers = pData[0];
-  uint8_t newReport[8] = {0};
-
-  // Normalize to 8-byte format: [Mod] [Reserved=0] [Key1-Key6]
-  if (length == 8) {
-    memcpy(newReport, pData, 8);
-  } else {
-    // 7-byte compact: insert reserved byte
-    newReport[0] = pData[0];  // Modifiers
-    newReport[1] = 0;          // Reserved
-    memcpy(&newReport[2], &pData[1], 6);
-  }
-
-#ifndef RELEASE_BUILD
-  Serial.print("KB: ");
-  for (int i = 0; i < 8; i++) Serial.printf("%02X ", newReport[i]);
-  Serial.println();
-#endif
+  uint8_t modifiers = newReport[0];
 
   // Detect newly pressed keys (bytes 2-7 in normalized format)
   for (int i = 2; i < 8; i++) {
@@ -129,7 +99,6 @@ static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
       if (lastReport[j] == newReport[i]) { wasPressed = true; break; }
     }
     if (!wasPressed) {
-      DBG_PRINTF("  KEY PRESS: 0x%02X mod=0x%02X\n", newReport[i], modifiers);
       enqueueKeyEvent(newReport[i], modifiers, true);
     }
   }
@@ -142,7 +111,6 @@ static void onKeyboardNotify(NimBLERemoteCharacteristic* pRemChar,
       if (newReport[j] == lastReport[i]) { stillPressed = true; break; }
     }
     if (!stillPressed) {
-      DBG_PRINTF("  KEY RELEASE: 0x%02X\n", lastReport[i]);
       enqueueKeyEvent(lastReport[i], modifiers, false);
     }
   }
@@ -170,19 +138,22 @@ static class ScanCallbacks : public NimBLEScanCallbacks {
 } scanCallbacks;
 
 static class ClientCallbacks : public NimBLEClientCallbacks {
-  void onConnect(NimBLEClient* pclient) override {
-    DBG_PRINTLN("[BLE] Connected to device");
-    // Don't call secureConnection() here - the connect task handles it
+  // GAP callbacks never log or wait: yielding here can let an awaiting task
+  // return while NimBLE still holds a pointer to its stack-local completion data.
+  void onConnect(NimBLEClient* pclient) override {}
+  void onConnectFail(NimBLEClient* pclient, int reason) override {
+    connectFailed = true;
+    pendingDisconnectReason = reason;
   }
-
   void onDisconnect(NimBLEClient* pclient, int reason) override {
+    ++linkEpoch;
+    connectFailed = true;
     bleState = BLEState::DISCONNECTED;
-    pInputReportChar = nullptr;
-    pRemoteService = nullptr;
     authSuccess = false;
-    memset(lastReport, 0, 8);
+    memset(lastReport, 0, sizeof(lastReport));
     lastReconnectAttempt = millis();
-    DBG_PRINTLN("[BLE] Disconnected");
+    pendingDisconnectReason = reason;
+    extern bool screenDirty; screenDirty = true;
   }
 
   bool onConnParamsUpdateRequest(NimBLEClient* pClient,
@@ -198,12 +169,10 @@ static class ClientCallbacks : public NimBLEClientCallbacks {
 
   // Security callbacks (merged from NimBLESecurityCallbacks — removed in 2.x)
   void onPassKeyEntry(NimBLEConnInfo& connInfo) override {
-    DBG_PRINTLN("[BLE] PassKeyEntry received - entering 123456");
     NimBLEDevice::injectPassKey(connInfo, 123456);
   }
 
   void onConfirmPasskey(NimBLEConnInfo& connInfo, uint32_t pin) override {
-    DBG_PRINTF("[BLE] Confirm passkey: %06lu - auto-accepting\n", (unsigned long)pin);
     currentPasskey = pin;
     extern bool screenDirty;
     screenDirty = true;
@@ -211,178 +180,67 @@ static class ClientCallbacks : public NimBLEClientCallbacks {
   }
 
   void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
-    DBG_PRINTF("[BLE] Auth complete: encrypted=%d bonded=%d\n",
-               connInfo.isEncrypted(), connInfo.isBonded());
-
-    if (connInfo.isEncrypted()) {
-      authSuccess = true;
-      DBG_PRINTLN("[BLE] Auth success");
-    } else {
-      authSuccess = false;
-      DBG_PRINTLN("[BLE] Auth failed - not encrypted");
-    }
+    authSuccess = connInfo.isEncrypted();
     currentPasskey = 0;
-    extern bool screenDirty;
-    screenDirty = true;
+    extern bool screenDirty; screenDirty = true;
   }
 } clientCallbacks;
 
 // --- HID service discovery and subscription ---
 
 static bool setupHidConnection() {
-  if (!pClient || !pClient->isConnected()) return false;
-
-  DBG_PRINTLN("[BLE] Discovering services...");
-  if (pClient->getServices(true).empty()) {
-    DBG_PRINTLN("[BLE] Service discovery failed");
-    return false;
-  }
-
-  pRemoteService = pClient->getService(hidServiceUUID);
-  if (!pRemoteService) {
-    DBG_PRINTLN("[BLE] HID service not found");
-    return false;
-  }
-
-  // Set report protocol mode FIRST (before subscribing)
-  NimBLEUUID protocolModeUUID((uint16_t)0x2a4e);  // Protocol Mode
-  NimBLERemoteCharacteristic* pProto = pRemoteService->getCharacteristic(protocolModeUUID);
-  if (pProto) {
-    uint8_t mode = 1;  // 1 = Report Protocol
-    pProto->writeValue(&mode, 1, true);
-    DBG_PRINTLN("[BLE] Set Protocol Mode to Report Protocol (1)");
-  } else {
-    DBG_PRINTLN("[BLE] WARNING: No Protocol Mode characteristic found");
-  }
-
-  // Find input report via Report Reference descriptor (type=1 means Input)
-  pInputReportChar = nullptr;
-  inputReportId = 0;
-  const auto& chars = pRemoteService->getCharacteristics(true);  // true = refresh from device
-  DBG_PRINTF("[BLE] Found %d characteristics in HID service\n", (int)chars.size());
-
-  for (auto& chr : chars) {
-    DBG_PRINTF("[BLE]   Char UUID: %s, canNotify=%d\n",
-               chr->getUUID().toString().c_str(), chr->canNotify());
-
-    if (chr->getUUID() != reportUUID) continue;
-
-    const auto& descs = chr->getDescriptors();
-    for (auto& d : descs) {
-      if (d->getUUID() == NimBLEUUID("2908")) {
-        NimBLEAttValue refData = d->readValue();
-        if (refData.size() >= 2) {
-          DBG_PRINTF("[BLE]     Report ref: ID=%d Type=%d\n",
-                     (uint8_t)refData[0], (uint8_t)refData[1]);
-          if ((uint8_t)refData[1] == 1) {
-            pInputReportChar = chr;
-            inputReportId = (uint8_t)refData[0];  // 0 = no ID prefix, non-zero = ID byte present
-            DBG_PRINTF("[BLE]     -> Selected as input report (reportId=%d)\n", inputReportId);
-            break;
-          }
-        }
-      }
-    }
-    if (pInputReportChar) break;
-  }
-
-  // Fallback: subscribe to ALL notifiable report chars to find keyboard input
-  if (!pInputReportChar) {
-    DBG_PRINTLN("[BLE] No report ref found, subscribing to ALL notifiable report chars");
-    int reportCount = 0;
-    for (auto& chr : chars) {
-      if (chr->getUUID() == reportUUID && chr->canNotify()) {
-        DBG_PRINTF("[BLE] Attempting subscribe to Report handle=%d...\n", chr->getHandle());
-        if (chr->subscribe(true, onKeyboardNotify)) {
-          reportCount++;
-          DBG_PRINTF("[BLE] SUCCESS - Subscribed to report char #%d (handle=%d)\n",
-                     reportCount, chr->getHandle());
-          if (reportCount == 1) {
-            pInputReportChar = chr;  // Keep first one as primary reference
-          }
-        } else {
-          DBG_PRINTF("[BLE] FAILED to subscribe to report char handle=%d\n", chr->getHandle());
-        }
-      }
-    }
-    if (reportCount > 0) {
-      DBG_PRINTF("[BLE] Total: Subscribed to %d report characteristics\n", reportCount);
-    } else {
-      DBG_PRINTLN("[BLE] WARNING: Failed to subscribe to any report characteristics!");
-    }
-  }
-
-  // Fallback: boot keyboard input
-  if (!pInputReportChar) {
-    DBG_PRINTLN("[BLE] No report char found, trying boot keyboard input");
-    pInputReportChar = pRemoteService->getCharacteristic(bootKeyboardInUUID);
-    if (pInputReportChar) {
-      DBG_PRINTLN("[BLE] Using boot keyboard input");
-    }
-  }
-
-  if (!pInputReportChar) {
-    DBG_PRINTLN("[BLE] No input report found");
-    return false;
-  }
-
-  // If we have a specific input report char (from report ref or boot keyboard),
-  // and we haven't already subscribed to it, subscribe now
-  if (pInputReportChar->getUUID() != reportUUID || !pInputReportChar->canNotify()) {
-    DBG_PRINTF("[BLE] Subscribing to char %s\n", pInputReportChar->getUUID().toString().c_str());
-    if (!pInputReportChar->subscribe(true, onKeyboardNotify)) {
-      DBG_PRINTLN("[BLE] Subscribe failed");
-      return false;
-    }
-    DBG_PRINTLN("[BLE] Subscribe succeeded");
-  } else {
-    DBG_PRINTLN("[BLE] Already subscribed to report char(s)");
-  }
-
-  DBG_PRINTLN("[BLE] HID setup complete");
-  return true;
+  if (!pClient) return false;
+  const uint32_t epoch = linkEpoch.load();
+  return setupBleHid<NimBLEUUID>(*pClient, onKeyboardNotify, [&] {
+    return !switchingApp && linkEpoch.load() == epoch && pClient->isConnected();
+  }, inputReportId);
 }
 
 // --- FreeRTOS task: runs connect + security + HID setup off the main loop ---
 
-static void bleConnectTask(void* param) {
+static void bleConnectAttempt() {
+  const std::string attemptAddress = keyboardAddress;
+  const uint8_t attemptAddressType = keyboardAddressType;
   bleState = BLEState::CONNECTING;
   authSuccess = false;
+  connectFailed = false;
 
   DBG_PRINTF("[BLE-Task] Connecting to %s type=%d\n",
-             keyboardAddress.c_str(), keyboardAddressType);
+             attemptAddress.c_str(), attemptAddressType);
 
-  // Guard: if the link layer is already up (bleState flipped to DISCONNECTED spuriously
-  // while the BLE connection is still alive), don't call connect() again — that crashes
-  // the NimBLE stack. Just re-sync state and exit.
+  // A live transport is not proof that HID setup completed. Close a stale link
+  // before rebuilding its attributes, rather than reporting a false ready state.
   if (pClient && pClient->isConnected()) {
-    DBG_PRINTLN("[BLE-Task] Already connected - re-syncing state");
-    bleState = BLEState::CONNECTED;
-    lastBleKeystrokeMs = millis();
-    bleConnIdleMode = false;
-    connectTaskHandle = nullptr;
-    vTaskDelete(NULL);
-    return;
+    pClient->disconnect();
+    unsigned long started = millis();
+    while (pClient->isConnected() && millis()-started < 1500) vTaskDelay(pdMS_TO_TICKS(20));
+    if (pClient->isConnected()) {
+      bleState = BLEState::DISCONNECTED;
+      return;
+    }
   }
 
   // Create/reuse client
   if (!pClient) {
     pClient = NimBLEDevice::createClient();
+    if (!pClient) { bleState = BLEState::DISCONNECTED; return; }
     pClient->setClientCallbacks(&clientCallbacks, false);
+    pClient->setSelfDelete(false, false);
   }
   pClient->setConnectTimeout(CONNECT_TIMEOUT_MS);
 
   // Step 1: Connect (blocks this task, main loop continues)
-  NimBLEAddress addr(keyboardAddress, keyboardAddressType);
-  // Delete any stored bond before connecting — forces a fresh "Just Works" pairing
-  // instead of an encrypted reconnect. Prevents a NimBLE security-state crash when
-  // the keyboard still holds a stale connection from a previous unclean disconnect.
-  NimBLEDevice::deleteBond(addr);
-  if (!pClient->connect(addr, true)) {
+  NimBLEAddress addr(attemptAddress, attemptAddressType);
+  // Reconnect with the existing encryption keys. Deleting only our half of the
+  // bond makes the keyboard retain keys that no longer match this host.
+  // Forget/remove remains the explicit path for clearing a damaged pairing.
+  connectFailed = false;
+  if (!connectBleAsync(*pClient, addr, CONNECT_TIMEOUT_MS,
+        [] { return static_cast<uint32_t>(millis()); },
+        [] { vTaskDelay(pdMS_TO_TICKS(20)); },
+        [] { return connectFailed.load() || switchingApp.load(); })) {
     DBG_PRINTLN("[BLE-Task] Connection failed");
     bleState = BLEState::DISCONNECTED;
-    connectTaskHandle = nullptr;
-    vTaskDelete(NULL);
     return;
   }
 
@@ -390,12 +248,14 @@ static void bleConnectTask(void* param) {
 
   // Step 2: Try security pairing (optional for some keyboards)
   // If this fails, we'll still try HID setup in case the keyboard doesn't require auth
-  bool secureAttempted = pClient->secureConnection();
+  const uint32_t epoch = linkEpoch.load();
+  bool secureAttempted = pClient->secureConnection(true);
 
   if (secureAttempted) {
     // Wait for auth callbacks
     unsigned long secStart = millis();
-    while (!authSuccess && (millis() - secStart < 5000)) {
+    while (!authSuccess && pClient->isConnected() && linkEpoch.load() == epoch &&
+           !switchingApp && (millis() - secStart < 5000)) {
       vTaskDelay(pdMS_TO_TICKS(100));
     }
 
@@ -411,12 +271,15 @@ static void bleConnectTask(void* param) {
   DBG_PRINTLN("[BLE-Task] Setting up HID...");
 
   // Step 4: Service discovery + HID subscription (blocks this task)
-  if (!setupHidConnection()) {
+  if (switchingApp || linkEpoch.load() != epoch || !pClient->isConnected() || !setupHidConnection()) {
     DBG_PRINTLN("[BLE-Task] HID setup failed, disconnecting");
     if (pClient->isConnected()) pClient->disconnect();
     bleState = BLEState::DISCONNECTED;
-    connectTaskHandle = nullptr;
-    vTaskDelete(NULL);
+    return;
+  }
+
+  if (switchingApp || linkEpoch.load() != epoch || !pClient->isConnected()) {
+    bleState = BLEState::DISCONNECTED;
     return;
   }
 
@@ -428,6 +291,8 @@ static void bleConnectTask(void* param) {
   bleConnIdleMode = false;
   lastBleKeystrokeMs = millis();  // Start the 3s idle timer from now, not from boot
   DBG_PRINTLN("[BLE-Task] Keyboard ready!");
+  extern bool screenDirty;
+  screenDirty = true;
 
   // NOTE: updateConnParams() is intentionally NOT called here.  Calling it immediately
   // after connecting triggers a reentrancy crash with Keychron keyboards (the keyboard
@@ -436,7 +301,7 @@ static void bleConnectTask(void* param) {
 
   // If the device didn't broadcast a name during scanning, read it from GATT now.
   // Generic Access service (0x1800) Device Name characteristic (0x2A00).
-  {
+  if (!switchingApp && pClient->isConnected()) {
     NimBLERemoteService* gasSvc = pClient->getService(NimBLEUUID((uint16_t)0x1800));
     if (gasSvc) {
       NimBLERemoteCharacteristic* nameChr = gasSvc->getCharacteristic(NimBLEUUID((uint16_t)0x2A00));
@@ -444,7 +309,7 @@ static void bleConnectTask(void* param) {
         std::string gattName = nameChr->readValue();
         if (!gattName.empty()) {
           for (auto& d : discoveredDevices) {
-            if (d.address == keyboardAddress && d.name == keyboardAddress) {
+            if (d.address == attemptAddress && d.name == attemptAddress) {
               d.name = gattName;
               break;
             }
@@ -456,16 +321,23 @@ static void bleConnectTask(void* param) {
 
   // Store device to NVS for future reconnects, then reset cycling index to this keyboard
   {
-    std::string devName = keyboardAddress;
+    std::string devName = attemptAddress;
     for (auto& d : discoveredDevices) {
-      if (d.address == keyboardAddress) { devName = d.name; break; }
+      if (d.address == attemptAddress) { devName = d.name; break; }
     }
-    storePairedDevice(keyboardAddress, devName);
+    storePairedDevice(attemptAddress, devName);
     // After a successful connect, next auto-reconnect attempt starts from this keyboard
     int newLastKb = getLastUsedKeyboardIndex();
     reconnectKeyboardIndex = (newLastKb >= 0) ? newLastKb : 0;
   }
 
+
+}
+
+// Unwind C++ attempt locals before deleting the FreeRTOS task (vTaskDelete
+// does not invoke destructors, including the address string's allocation).
+static void bleConnectTask(void*) {
+  bleConnectAttempt();
   connectTaskHandle = nullptr;
   vTaskDelete(NULL);
 }
@@ -479,7 +351,11 @@ static void startConnectTask() {
   // 20480 bytes: Logitech has a complex service tree (keyboard + media + battery reports
   // + many descriptors). NimBLE 2.x uses more per-call stack than 1.4.x — 12288 was
   // sufficient before but overflows during full service discovery on the Logitech.
-  xTaskCreate(bleConnectTask, "ble_conn", 20480, NULL, 1, &connectTaskHandle);
+  if (xTaskCreate(bleConnectTask, "ble_conn", 20480, NULL, 1, &connectTaskHandle) != pdPASS) {
+    connectTaskHandle = nullptr;
+    bleState = BLEState::DISCONNECTED;
+    DBG_PRINTLN("[BLE] Could not allocate connection task");
+  }
 }
 
 // --- NVS multi-keyboard helpers ---
@@ -643,6 +519,9 @@ void bleSetup() {
 }
 
 void bleLoop() {
+  int reason = pendingDisconnectReason.exchange(0);
+  if (reason) DBG_PRINTF("[BLE] Link ended/failed, reason=%d\n", reason);
+  if (switchingApp) return;
   // Detect when a one-shot scan finishes
   if (isScanning && !NimBLEDevice::getScan()->isScanning()) {
     isScanning = false;
@@ -704,6 +583,27 @@ void cancelPendingConnection() {
   }
 }
 
+bool blePrepareForAppSwitch(uint32_t timeoutMs) {
+  switchingApp = true;
+  connectToKeyboard = false;
+  if (isScanning) stopDeviceScan();
+  if (pClient) {
+    pClient->cancelConnect();
+    if (pClient->isConnected()) pClient->disconnect();
+  }
+  unsigned long started = millis();
+  while (connectTaskHandle != nullptr || (pClient && pClient->isConnected())) {
+    if (millis()-started >= timeoutMs) {
+      switchingApp = false;
+      lastReconnectAttempt = millis();
+      return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  switchingApp = false;
+  return true;
+}
+
 void startDeviceScan() {
   cancelPendingConnection();
 
@@ -738,6 +638,7 @@ BleDeviceInfo* getDiscoveredDevices() {
 }
 
 void connectToDevice(int deviceIndex) {
+  if (switchingApp || connectTaskHandle != nullptr) return;
   if (deviceIndex < 0 || deviceIndex >= (int)discoveredDevices.size()) {
     DBG_PRINTLN("[BLE] Invalid device index");
     return;
@@ -763,8 +664,6 @@ void disconnectCurrentDevice() {
     pClient->disconnect();
   }
   bleState = BLEState::DISCONNECTED;
-  pInputReportChar = nullptr;
-  pRemoteService = nullptr;
   memset(lastReport, 0, 8);
   lastReconnectAttempt = millis();
   keyboardAddress = "";
@@ -835,6 +734,7 @@ bool removePairedKeyboard(int index) {
 }
 
 void connectToPairedKeyboard(int index) {
+  if (switchingApp || connectTaskHandle != nullptr) return;
   int count = nvs_loadCount();
   if (index < 0 || index >= count) return;
 
