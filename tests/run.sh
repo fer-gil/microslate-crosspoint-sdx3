@@ -14,7 +14,7 @@ case "$(uname -s)" in
 esac
 ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror -DRELEASE_BUILD -g \
   -fsanitize=address,undefined -fno-omit-frame-pointer -ffunction-sections -fdata-sections \
-  -Isrc -Itests/fakes tests/test_input.cpp src/markdown.cpp src/text_editor.cpp \
+  -Isrc -Itests/fakes tests/test_input.cpp src/markdown.cpp src/text_editor.cpp src/file_manager.cpp \
   "$discard" -o "$out/test_input"
 "$out/test_input"
 ${CXX:-c++} -std=c++17 -Wall -Wextra -Werror -DRELEASE_BUILD -DINPUT_MANAGER_TEST -g \

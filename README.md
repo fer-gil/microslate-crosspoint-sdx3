@@ -107,11 +107,12 @@ Options: **Browse Notes**, **New Note**, **Settings**, **Sync** — and **CrossP
 | Up / Down | Navigate list |
 | Left / Right | Also navigate (convenient in landscape) |
 | Enter | Open note |
-| Ctrl+N | Edit title of selected note |
+| Ctrl+N | Create a new note, including when the list is empty |
+| Ctrl+R / F2 | Edit title of selected note |
 | Ctrl+D | Delete selected note (confirmation required) |
 | Esc | Back to main menu |
 
-When delete is pending, the footer shows `Delete? Enter:Yes  Esc:No`. Press Enter to confirm or any other key to cancel.
+When delete is pending, the footer shows `Delete? Enter:Yes  Esc:No`. Press Enter to confirm or Esc to cancel.
 
 ### Text Editor
 
@@ -122,7 +123,8 @@ When delete is pending, the footer shows `Delete? Enter:Yes  Esc:No`. Press Ente
 | Backspace / Delete | Remove characters |
 | Tab | Cycle writing mode (Scroll → Typewriter → Pagination) |
 | Ctrl+S | Save manually |
-| Ctrl+N | Edit note title |
+| Ctrl+N | Save this note and create a new one |
+| Ctrl+R / F2 | Edit note title |
 | Ctrl+Z | Toggle clean mode (hides UI chrome) |
 | Ctrl+T | Toggle Typewriter mode |
 | Ctrl+P | Toggle Pagination mode |
@@ -143,7 +145,7 @@ Auto-save runs silently after 10 seconds of idle or every 2 minutes during conti
 
 ### Title Edit
 
-Accessed via Ctrl+N from the file browser or editor.
+Accessed via Ctrl+R or F2 from the file browser or editor. Ctrl+N creates a new note. Cancelling its title keeps an Untitled draft that can still save as a unique .md file.
 
 | Key | Action |
 |-----|--------|
@@ -316,3 +318,7 @@ MicroSlate is the hardware companion to **TypeSlate** — a free, full-screen di
 - **Website** — [typeslate.com](https://typeslate.com)
 
 If MicroSlate is useful to you and you'd like to say thanks, you can support the project at [ko-fi.com/typeslate](https://ko-fi.com/typeslate).
+
+### Save failure recovery
+
+If saving fails on exit or Ctrl+N, the text remains in memory. The recovery screen offers Retry saving, Keep editing (default), and Discard changes and leave. Esc returns to editing. Navigate with arrows or physical buttons and confirm with Enter/Confirm. Discard is explicit and leaves the last saved disk version unchanged. USB reset or power loss can still lose unsaved memory.

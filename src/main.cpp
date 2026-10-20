@@ -180,6 +180,7 @@ static void updateScreen() {
     case UIState::FILE_BROWSER:      drawFileBrowser(renderer, gpio); break;
     case UIState::TEXT_EDITOR:       drawTextEditor(renderer, gpio); break;
     case UIState::RENAME_FILE:       drawRenameScreen(renderer, gpio); break;
+    case UIState::SAVE_ERROR:        drawSaveErrorScreen(renderer, gpio); break;
     case UIState::SETTINGS:          drawSettingsMenu(renderer, gpio); break;
     case UIState::BLUETOOTH_SETTINGS: drawBluetoothSettings(renderer, gpio); break;
     case UIState::PAIRED_KEYBOARDS:   drawPairedKeyboardsMenu(renderer, gpio); break;
@@ -295,9 +296,9 @@ void enterDeepSleep(SleepReason reason) {
   DBG_PRINTLN("Entering deep sleep...");
   
   // Save any unsaved work
-  if (currentState == UIState::TEXT_EDITOR && editorHasUnsavedChanges()) {
+  if (editorHasUnsavedChanges()) {
     saveCurrentFile();
-    if (editorHasUnsavedChanges()) { screenDirty = true; return; }
+    if (editorHasUnsavedChanges()) { requestEditorExit(UIState::MAIN_MENU); return; }
   }
   renderSleepScreen();
 
@@ -347,9 +348,9 @@ static void processPhysicalButtons() {
     if (!sleepTriggered && duration > 50 && duration < 1000) {
       // Short press - go to main menu (except when already there)
       if (currentState != UIState::MAIN_MENU) {
-        if (currentState == UIState::TEXT_EDITOR && editorHasUnsavedChanges()) {
-          saveCurrentFile();
-          if (editorHasUnsavedChanges()) { screenDirty = true; return; }
+        if (editorHasUnsavedChanges()) {
+          requestEditorExit(UIState::MAIN_MENU);
+          return;
         }
         currentState = UIState::MAIN_MENU;
         screenDirty = true;
@@ -372,9 +373,9 @@ static void processPhysicalButtons() {
     if (millis() - backPressStart > 5000) {
       restartTriggered = true;
       DBG_PRINTLN("BACK held for 5s — restarting device...");
-      if (currentState == UIState::TEXT_EDITOR && editorHasUnsavedChanges()) {
+      if (editorHasUnsavedChanges()) {
         saveCurrentFile();
-        if (editorHasUnsavedChanges()) { screenDirty = true; return; }
+        if (editorHasUnsavedChanges()) { requestEditorExit(UIState::MAIN_MENU); return; }
       }
       delay(100);
       ESP.restart();
@@ -387,6 +388,7 @@ static void processPhysicalButtons() {
 
   // Map physical buttons to HID key codes based on current UI state
   switch (currentState) {
+    case UIState::SAVE_ERROR:
     case UIState::MAIN_MENU:
       if (gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_RIGHT)) {
         enqueueKeyEvent(HID_KEY_UP, 0, true);
@@ -399,6 +401,10 @@ static void processPhysicalButtons() {
       if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
         enqueueKeyEvent(HID_KEY_ENTER, 0, true);
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
+      }
+      if (currentState == UIState::SAVE_ERROR && gpio.wasPressed(HalGPIO::BTN_BACK)) {
+        enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
+        enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
       break;
 
@@ -467,10 +473,8 @@ static void processPhysicalButtons() {
         enqueueKeyEvent(HID_KEY_ENTER, 0, false);
       }
       if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
-        if (editorHasUnsavedChanges()) saveCurrentFile();
-        if (editorHasUnsavedChanges()) { screenDirty = true; return; }
-        currentState = UIState::FILE_BROWSER;
-        screenDirty = true;
+        enqueueKeyEvent(HID_KEY_ESCAPE, 0, true);
+        enqueueKeyEvent(HID_KEY_ESCAPE, 0, false);
       }
       break;
     }
@@ -675,12 +679,12 @@ void loop() {
   // - Hard cap every 2min during continuous typing (never lose more than 2min of work)
   static unsigned long lastAutoSaveMs = 0;
   if (currentState == UIState::TEXT_EDITOR
-      && editorHasUnsavedChanges()
-      && editorGetCurrentFile()[0] != '\0') {
+      && editorHasUnsavedChanges()) {
     unsigned long now = millis();
     if (autosaveDue(now, lastInputTime, lastAutoSaveMs)) {
       lastAutoSaveMs = now;
       saveCurrentFile(false);  // Skip refreshFileList — file list unchanged by content update
+      screenDirty = true;
     }
   }
 
@@ -733,7 +737,8 @@ void loop() {
   }
 
   // Check for idle timeout (skip while WiFi sync is active)
-  if (!isWifiSyncActive() && millis() - lastActivityTime > IDLE_TIMEOUT) {
+  if (!isWifiSyncActive() && currentState != UIState::SAVE_ERROR &&
+      millis() - lastActivityTime > IDLE_TIMEOUT) {
     enterDeepSleep(SleepReason::IDLE_TIMEOUT);
   }
 

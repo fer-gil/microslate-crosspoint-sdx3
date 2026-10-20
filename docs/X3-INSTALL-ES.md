@@ -138,3 +138,11 @@ en su nueva posición. Sal y vuelve a MicroSlate para verificar reconexión sin
 volver a emparejar. `~` seguido de `n` produce `ñ`; `~` seguido de `N` produce `Ñ`.
 Si falla algún paso, conserva la nota guardada e indica el paso exacto antes de
 seguir usando esta versión.
+
+### Notas nuevas y fallo de guardado
+
+Ctrl+N crea una nota desde el menú, la lista (también vacía) o el editor. Si hay cambios, primero intenta guardarlos. Ctrl+R o F2 cambia el título. Cancelar el título o dejarlo vacío permite escribir y guardar como `untitled.md` con un sufijo único si hace falta; autosave también funciona en ese borrador.
+
+Ante un error de guardado al salir aparecen `Retry saving`, `Keep editing` y `Discard changes and leave`. La opción inicial conserva la edición. Esc vuelve al texto; las flechas y botones físicos permiten elegir. Descartar requiere seleccionar esa opción y confirmar: pierde los cambios posteriores al último guardado. Los datos que solo están en memoria se pierden al reiniciar.
+
+Prueba de regresión en una nota desechable: desde una lista vacía pulsa Ctrl+N, cancela el título con Esc, escribe, guarda con Ctrl+S, sal con Esc y vuelve a abrir. No borres notas importantes para probarlo.

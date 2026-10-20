@@ -3,6 +3,7 @@
 #include "text_editor.h"
 #include "markdown.h"
 #include "file_manager.h"
+#include "input_handler.h"
 #include "ble_keyboard.h"
 #include "wifi_sync.h"
 
@@ -294,7 +295,7 @@ void drawFileBrowser(GfxRenderer& renderer, HalGPIO& gpio) {
     drawFooterHints(renderer, sh - footerH + 4, tc, {"Delete?", "Enter:Yes", "Esc:No"});
   } else {
     drawClippedText(renderer, FONT_SMALL, 10, sh - footerH + 4,
-                    "Ctrl+N:Title  Ctrl+D:Delete", 0, tc);
+                    "Ctrl+N:New  F2:Title  Ctrl+D:Delete", 0, tc);
   }
 
   renderer.beginRefresh(HalDisplay::FAST_REFRESH);
@@ -508,6 +509,28 @@ void drawTextEditor(GfxRenderer& renderer, HalGPIO& gpio) {
   }
 
   renderer.beginRefresh(editorRefresh);
+}
+
+void drawSaveErrorScreen(GfxRenderer& renderer, HalGPIO& gpio) {
+  renderer.clearScreen();
+  int sw = renderer.getScreenWidth();
+  int sh = renderer.getScreenHeight();
+  bool tc = !darkMode;
+  if (darkMode) clippedFillRect(renderer, 0, 0, sw, sh, true);
+  drawClippedText(renderer, FONT_UI, 15, 8, "Save failed", 0, tc, EpdFontFamily::BOLD);
+  drawBattery(renderer, gpio);
+  drawClippedText(renderer, FONT_UI, 15, 48, "Your text is still in memory.", sw - 30, tc);
+  drawClippedText(renderer, FONT_SMALL, 15, 76, fileManagerSaveError(), sw - 30, tc);
+  drawClippedText(renderer, FONT_SMALL, 15, 100, "Discard loses changes since the last save.", sw - 30, tc);
+  const char* choices[] = {"Retry saving", "Keep editing", "Discard changes and leave"};
+  for (int i = 0; i < 3; ++i) {
+    int y = 145 + i * 36;
+    bool selected = i == getSaveErrorSelection();
+    if (selected) clippedFillRect(renderer, 10, y - 4, sw - 20, 30, tc);
+    drawClippedText(renderer, FONT_UI, 20, y, choices[i], sw - 40, selected ? !tc : tc);
+  }
+  drawFooterHints(renderer, sh - 30, tc, {"Arrows: Choose", "Enter: Select", "Esc: Edit"});
+  renderer.beginRefresh(HalDisplay::FAST_REFRESH);
 }
 
 void drawRenameScreen(GfxRenderer& renderer, HalGPIO& gpio) {

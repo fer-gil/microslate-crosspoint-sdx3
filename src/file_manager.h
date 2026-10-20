@@ -15,3 +15,4 @@ void updateFileTitle(const char* filename, const char* newTitle);
 void deleteFile(const char* filename);
 
 bool fileManagerSaveFailed();
+const char* fileManagerSaveError();

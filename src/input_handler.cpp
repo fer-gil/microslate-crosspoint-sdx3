@@ -257,6 +257,66 @@ extern bool screenDirty;
 extern char renameBuffer[];
 extern int renameBufferLen;
 
+static UIState afterSave = UIState::FILE_BROWSER;
+static int saveErrorSelection = 1; // Keep editing is the safe default.
+int getSaveErrorSelection() { return saveErrorSelection; }
+
+static void completeEditorAction(UIState destination) {
+  pendingDeadKey = 0;
+  deleteConfirmPending = false;
+  if (destination == UIState::NEW_FILE) {
+    createNewFile();
+    openTitleEdit("Untitled", UIState::TEXT_EDITOR);
+  } else {
+    currentState = destination;
+    screenDirty = true;
+  }
+}
+
+void requestEditorExit(UIState destination) {
+  if (editorHasUnsavedChanges()) saveCurrentFile();
+  if (editorHasUnsavedChanges()) {
+    afterSave = destination;
+    saveErrorSelection = 1;
+    currentState = UIState::SAVE_ERROR;
+    screenDirty = true;
+    return;
+  }
+  completeEditorAction(destination);
+}
+
+static bool handleNoteShortcut(uint8_t keyCode, uint8_t modifiers) {
+  if (isCtrl(modifiers) && keyCode == HID_KEY_N &&
+      (currentState == UIState::MAIN_MENU || currentState == UIState::FILE_BROWSER ||
+       currentState == UIState::TEXT_EDITOR)) {
+    requestEditorExit(UIState::NEW_FILE);
+    return true;
+  }
+  return false;
+}
+
+static void handleSaveErrorKey(uint8_t keyCode) {
+  if (keyCode == HID_KEY_ESCAPE) {
+    // Escape always leaves this dialog without throwing away the buffer.
+    currentState = UIState::TEXT_EDITOR;
+  } else if (keyCode == HID_KEY_UP || keyCode == HID_KEY_LEFT) {
+    saveErrorSelection = (saveErrorSelection + 2) % 3;
+  } else if (keyCode == HID_KEY_DOWN || keyCode == HID_KEY_RIGHT) {
+    saveErrorSelection = (saveErrorSelection + 1) % 3;
+  } else if (keyCode == HID_KEY_ENTER) {
+    if (saveErrorSelection == 0) {
+      requestEditorExit(afterSave);
+    } else if (saveErrorSelection == 1) {
+      currentState = UIState::TEXT_EDITOR;
+    } else {
+      // Only an explicit selection discards unsaved work. Disk stays untouched.
+      editorSetUnsavedChanges(false);
+      completeEditorAction(afterSave == UIState::TEXT_EDITOR ? UIState::FILE_BROWSER : afterSave);
+    }
+  }
+  screenDirty = true;
+}
+
 void inputSetup() {
   queueHead = 0;
   queueTail = 0;
@@ -334,6 +394,7 @@ char hidToAscii(uint8_t hid, uint8_t modifiers) {
 
 // Handle text editor input
 static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
+  if (handleNoteShortcut(keyCode, modifiers)) return;
   // Ctrl shortcuts
   if (isCtrl(modifiers)) {
     if (keyCode == HID_KEY_M) { // Ctrl+M: visual/source Markdown
@@ -341,6 +402,11 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
     }
     if (keyCode == HID_KEY_S) {
       saveCurrentFile();
+      if (editorHasUnsavedChanges()) {
+        afterSave = UIState::TEXT_EDITOR;
+        saveErrorSelection = 1;
+        currentState = UIState::SAVE_ERROR;
+      }
       screenDirty = true;
       return;
     }
@@ -349,7 +415,7 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
       screenDirty = true;
       return;
     }
-    if (keyCode == HID_KEY_N) {
+    if (keyCode == HID_KEY_R) {
       openTitleEdit(editorGetCurrentTitle(), UIState::TEXT_EDITOR);
       return;
     }
@@ -393,10 +459,11 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
 
   // ESC = save and return to file browser
   if (keyCode == HID_KEY_ESCAPE) {
-    if (editorHasUnsavedChanges()) saveCurrentFile();
-    if (editorHasUnsavedChanges()) { screenDirty = true; return; }
-    currentState = UIState::FILE_BROWSER;
-    screenDirty = true;
+    requestEditorExit(UIState::FILE_BROWSER);
+    return;
+  }
+  if (keyCode == HID_KEY_F2) {
+    openTitleEdit(editorGetCurrentTitle(), UIState::TEXT_EDITOR);
     return;
   }
 
@@ -443,6 +510,7 @@ static void handleEditorKey(uint8_t keyCode, uint8_t modifiers) {
 
 // Open the title edit screen, returning to `returnTo` on confirm/cancel
 static void openTitleEdit(const char* currentTitle, UIState returnTo) {
+  pendingDeadKey = 0;
   strncpy(renameBuffer, currentTitle, MAX_TITLE_LEN - 1);
   renameBuffer[MAX_TITLE_LEN - 1] = '\0';
   renameBufferLen = strlen(renameBuffer);
@@ -515,6 +583,7 @@ static void handleRenameKey(uint8_t keyCode, uint8_t modifiers) {
 
 static void dispatchEvent(const KeyEvent& event) {
   if (!event.pressed) return;
+  if (handleNoteShortcut(event.keyCode, event.modifiers)) return;
 
   switch (currentState) {
     case UIState::MAIN_MENU: {
@@ -531,8 +600,7 @@ static void dispatchEvent(const KeyEvent& event) {
           currentState = UIState::FILE_BROWSER;
           screenDirty = true;
         } else if (mainMenuSelection == 1) {
-          createNewFile();
-          openTitleEdit("Untitled", UIState::TEXT_EDITOR);
+          requestEditorExit(UIState::NEW_FILE);
         } else if (mainMenuSelection == 2) {
           currentState = UIState::SETTINGS;
           screenDirty = true;
@@ -578,7 +646,7 @@ static void dispatchEvent(const KeyEvent& event) {
         FileInfo* files = getFileList();
         loadFile(files[selectedFileIndex].filename);
         screenDirty = true;
-      } else if (isCtrl(event.modifiers) && event.keyCode == HID_KEY_N) {
+      } else if ((isCtrl(event.modifiers) && event.keyCode == HID_KEY_R) || event.keyCode == HID_KEY_F2) {
         if (fc > 0) {
           FileInfo* files = getFileList();
           openTitleEdit(files[selectedFileIndex].title, UIState::FILE_BROWSER);
@@ -597,6 +665,10 @@ static void dispatchEvent(const KeyEvent& event) {
 
     case UIState::TEXT_EDITOR:
       handleEditorKey(event.keyCode, event.modifiers);
+      break;
+
+    case UIState::SAVE_ERROR:
+      handleSaveErrorKey(event.keyCode);
       break;
 
     case UIState::RENAME_FILE:

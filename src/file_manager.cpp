@@ -10,7 +10,9 @@
 static FileInfo fileList[MAX_FILES];
 static int fileCount = 0;
 static bool saveFailed = false;
+static const char* saveError = "";
 bool fileManagerSaveFailed() { return saveFailed; }
+const char* fileManagerSaveError() { return saveError; }
 
 // Shared state
 extern UIState currentState;
@@ -179,8 +181,17 @@ void loadFile(const char* filename) {
 
 void saveCurrentFile(bool refreshList) {
   saveFailed = true;
+  saveError = "No filename available";
   const char* filename = editorGetCurrentFile();
-  if (filename[0] == '\0') return;
+  // Cancelling the title dialog must still leave a saveable new note.
+  char generated[MAX_FILENAME_LEN];
+  if (filename[0] == '\0') {
+    deriveUniqueFilename(editorGetCurrentTitle(), generated, sizeof(generated));
+    if (!generated[0]) return;
+    filename = generated;
+  }
+  saveError = "Cannot create notes folder";
+  if (!SdMan.exists("/notes") && !SdMan.mkdir("/notes")) { SdMan.sleep(); return; }
 
   char path[320], tmpPath[336], bakPath[336];
   snprintf(path, sizeof(path), "/notes/%s", filename);
@@ -188,9 +199,11 @@ void saveCurrentFile(bool refreshList) {
   snprintf(bakPath, sizeof(bakPath), "%s.bak", path);
 
   // Step 1: Write new content to .tmp
+  saveError = "Cannot open temporary file";
   auto file = SdMan.open(tmpPath, O_WRONLY | O_CREAT | O_TRUNC);
   if (!file) {
     DBG_PRINTF("saveCurrentFile: could not create tmp: %s\n", tmpPath);
+    SdMan.sleep();
     return;
   }
 
@@ -200,8 +213,10 @@ void saveCurrentFile(bool refreshList) {
 
   // Step 2: Verify bytes written match expected length
   if (written != toWrite) {
+    saveError = "Write incomplete";
     DBG_PRINTF("saveCurrentFile: write mismatch (%d/%d) — aborting\n", (int)written, (int)toWrite);
     SdMan.remove(tmpPath);
+    SdMan.sleep();
     return;
   }
 
@@ -217,18 +232,24 @@ void saveCurrentFile(bool refreshList) {
     offset += count;
   }
   if (check) check.close();
+  saveError = "Read-back failed";
   if (!verified) { SdMan.remove(tmpPath); SdMan.sleep(); return; }
   bool hadOriginal = SdMan.exists(path);
   if (hadOriginal) {
+    saveError = "Cannot rotate backup";
     if (SdMan.exists(bakPath) && !SdMan.remove(bakPath)) { SdMan.sleep(); return; }
+    saveError = "Cannot preserve previous note";
     if (!SdMan.rename(path, bakPath)) { SdMan.sleep(); return; }
   }
+  saveError = "Cannot commit note";
   if (!SdMan.rename(tmpPath, path)) {
     if (hadOriginal) SdMan.rename(bakPath, path);
     SdMan.sleep(); return;
   }
 
   saveFailed = false;
+  saveError = "";
+  if (filename == generated) editorSetCurrentFile(generated);
   editorSetUnsavedChanges(false);
   if (refreshList) refreshFileList();
   SdMan.sleep();
@@ -236,6 +257,8 @@ void saveCurrentFile(bool refreshList) {
 }
 
 void createNewFile() {
+  saveFailed = false;
+  saveError = "";
   editorClear();
   editorSetCurrentFile("");       // filename derived from title when user confirms
   editorSetCurrentTitle("Untitled");
